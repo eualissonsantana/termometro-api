@@ -1,0 +1,75 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String          @id @default(uuid())
+  name          String          @db.VarChar(100)
+  email         String          @unique @db.VarChar(150)
+  password_hash String          @db.VarChar(255)
+  daily_rate    Decimal         @default(0) @db.Decimal(10, 2)
+  created_at    DateTime        @default(now())
+  transactions  Transaction[]
+  categories    Category[]
+  monthlyConfig MonthlyConfig[]
+
+  @@map("users")
+}
+
+model Category {
+  id           String          @id @default(uuid())
+  user_id      String?         // NULL = categoria padrão do sistema
+  type         TransactionType
+  name         String          @db.VarChar(100)
+  is_default   Boolean         @default(false)
+  active       Boolean         @default(true)
+  user         User?           @relation(fields: [user_id], references: [id])
+  transactions Transaction[]
+
+  @@map("categories")
+}
+
+model Transaction {
+  id          String          @id @default(uuid())
+  user_id     String
+  type        TransactionType
+  category_id String?
+  amount      Decimal         @db.Decimal(10, 2)
+  description String?         @db.VarChar(255)
+  date        DateTime        @db.Date
+  source      Source          @default(web)
+  created_at  DateTime        @default(now())
+  user        User            @relation(fields: [user_id], references: [id])
+  category    Category?       @relation(fields: [category_id], references: [id])
+
+  @@map("transactions")
+}
+
+model MonthlyConfig {
+  id                String  @id @default(uuid())
+  user_id           String
+  month             String  @db.VarChar(7)
+  recurring_incomes Json?
+  user              User    @relation(fields: [user_id], references: [id])
+
+  @@unique([user_id, month])
+  @@map("monthly_config")
+}
+
+enum TransactionType {
+  entrada
+  saida
+  diario
+  economia
+  cartao
+}
+
+enum Source {
+  web
+  whatsapp
+}
