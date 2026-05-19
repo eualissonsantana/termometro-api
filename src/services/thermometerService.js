@@ -1,88 +1,140 @@
 import { prisma } from '../lib/prisma.js'
 
-// Recebe userId e month ("2026-05"), retorna array com um objeto por dia do mês.
-// initialBalance permite passar um saldo acumulado de fora (usado em getPerformanceData).
-export async function getThermometerData(userId, month, initialBalance = null) {
+const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+
+// Walks day-by-day from the user's first transaction up to (not including) the first day
+// of `monthStr`, accumulating the real balance including projected daily_rate for days
+// without a real 'diario' entry. This is what makes the balance truly continuous.
+async function computeBalanceBeforeMonth(userId, monthStr) {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { daily_rate: true },
+  })
+  const dailyRate = Number(user.daily_rate)
+
+  const monthStartDate = new Date(monthStr + '-01T00:00:00.000Z')
+
+  const priorTransactions = await prisma.transaction.findMany({
+    where: { user_id: userId, date: { lt: monthStartDate } },
+    orderBy: { date: 'asc' },
+  })
+
+  if (!priorTransactions.length) return 0
+
+  // Group by UTC date string for O(1) lookup in the day loop
+  const byDate = {}
+  for (const t of priorTransactions) {
+    const key = t.date.toISOString().slice(0, 10)
+    if (!byDate[key]) byDate[key] = []
+    byDate[key].push(t)
+  }
+
+  const startDateStr = priorTransactions[0].date.toISOString().slice(0, 10)
+  const endDateStr = shiftDay(monthStr + '-01', -1) // last day of the month before monthStr
+
+  let balance = 0
+  let current = startDateStr
+
+  while (current <= endDateStr) {
+    const dayTxs = byDate[current] || []
+    let income = 0, expense = 0, daily = 0, savings = 0, card = 0
+    let hasDiario = false
+
+    for (const t of dayTxs) {
+      if (t.type === 'entrada') income += Number(t.amount)
+      else if (t.type === 'saida') expense += Number(t.amount)
+      else if (t.type === 'diario') { daily += Number(t.amount); hasDiario = true }
+      else if (t.type === 'economia') savings += Number(t.amount)
+      else if (t.type === 'cartao') card += Number(t.amount)
+    }
+
+    if (!hasDiario) daily = dailyRate
+
+    balance += income - expense - daily - savings - card
+    current = shiftDay(current, 1)
+  }
+
+  return balance
+}
+
+// Returns YYYY-MM-DD shifted by `days` (positive or negative).
+function shiftDay(dateStr, days) {
+  const [y, m, d] = dateStr.split('-').map(Number)
+  return new Date(Date.UTC(y, m - 1, d + days)).toISOString().slice(0, 10)
+}
+
+// Returns the thermometer array (one object per day) for the given month.
+// `startingBalance` is optional: when null, computes full history via computeBalanceBeforeMonth.
+// When provided (chained calls from getPerformanceData), uses the value directly.
+export async function getThermometerData(userId, month, startingBalance = null) {
   const [yearStr, monthStr] = month.split('-')
   const year = Number(yearStr)
   const m = Number(monthStr)
   const daysInMonth = new Date(Date.UTC(year, m, 0)).getUTCDate()
-
-  // Data de hoje como string UTC — evita problemas de fuso horário
   const todayStr = new Date().toISOString().slice(0, 10)
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
     select: { daily_rate: true },
   })
+  const dailyRate = Number(user.daily_rate)
 
-  const monthStartStr = `${yearStr}-${monthStr}-01`
-  // Último instante do mês em UTC
+  const monthStartDate = new Date(Date.UTC(year, m - 1, 1))
   const monthEndDate = new Date(Date.UTC(year, m, 0, 23, 59, 59))
 
-  const allTransactions = await prisma.transaction.findMany({
-    where: { user_id: userId, date: { lte: monthEndDate } },
+  const initialBalance = startingBalance !== null
+    ? startingBalance
+    : await computeBalanceBeforeMonth(userId, month)
+
+  const transactions = await prisma.transaction.findMany({
+    where: { user_id: userId, date: { gte: monthStartDate, lte: monthEndDate } },
     orderBy: { date: 'asc' },
   })
 
-  // Converte a data de cada transação para string UTC ("2026-05-01")
-  // Isso elimina o bug de fuso: Prisma devolve DateTime em UTC,
-  // e comparar string com string é sempre seguro.
-  const txWithDateStr = allTransactions.map(t => ({
-    ...t,
-    dateStr: t.date.toISOString().slice(0, 10),
-  }))
-
-  // Separa transações anteriores ao mês das que estão dentro do mês
-  let runningBalance = initialBalance ?? 0
-  const transactionsInMonth = []
-
-  for (const t of txWithDateStr) {
-    if (t.dateStr >= monthStartStr) {
-      transactionsInMonth.push(t)
-    } else {
-      // Se initialBalance foi passado de fora, não recalculamos o histórico
-      if (initialBalance === null) {
-        runningBalance += effectOnBalance(t)
-      }
-    }
+  const byDate = {}
+  for (const t of transactions) {
+    const key = t.date.toISOString().slice(0, 10)
+    if (!byDate[key]) byDate[key] = []
+    byDate[key].push(t)
   }
 
+  let balance = initialBalance
   const result = []
 
   for (let day = 1; day <= daysInMonth; day++) {
     const dateStr = `${yearStr}-${monthStr}-${String(day).padStart(2, '0')}`
     const isFuture = dateStr > todayStr
+    const dayTxs = byDate[dateStr] || []
 
-    const dayTransactions = transactionsInMonth.filter(t => t.dateStr === dateStr)
+    let income = 0, expense = 0, daily = 0, savings = 0, card = 0
+    let dailyIsProjected = false
 
-    let entrada = 0, saida = 0, diario = 0, economia = 0
-    let diarioProjetado = false
-
-    for (const t of dayTransactions) {
-      if (t.type === 'entrada') entrada += Number(t.amount)
-      if (t.type === 'saida') saida += Number(t.amount)
-      if (t.type === 'diario') diario += Number(t.amount)
-      if (t.type === 'economia') economia += Number(t.amount)
+    for (const t of dayTxs) {
+      if (t.type === 'entrada') income += Number(t.amount)
+      else if (t.type === 'saida') expense += Number(t.amount)
+      else if (t.type === 'diario') daily += Number(t.amount)
+      else if (t.type === 'economia') savings += Number(t.amount)
+      else if (t.type === 'cartao') card += Number(t.amount)
     }
 
-    // Se não houver diário lançado (passado ou futuro), usa o daily_rate como projeção
-    if (diario === 0) {
-      diario = Number(user.daily_rate)
-      diarioProjetado = true
+    if (daily === 0) {
+      daily = dailyRate
+      dailyIsProjected = true
     }
 
-    runningBalance += entrada - saida - diario - economia
+    balance += income - expense - daily - savings - card
 
+    // All numeric fields are always present and never null — frontend sums these directly
     result.push({
       day,
       date: dateStr,
-      entrada,
-      saida,
-      diario,
-      diario_projetado: diarioProjetado,
-      economia,
-      saldo: parseFloat(runningBalance.toFixed(2)),
+      entrada: income,
+      saida: expense,
+      diario: daily,
+      diario_projetado: dailyIsProjected,
+      cartao: card,
+      economia: savings,
+      saldo: parseFloat(balance.toFixed(2)),
       is_future: isFuture,
     })
   }
@@ -90,56 +142,47 @@ export async function getThermometerData(userId, month, initialBalance = null) {
   return result
 }
 
-// Para a performance anual, encadeamos os meses passando o saldo acumulado para frente.
-// Isso resolve o bug em que cada mês calculava do zero ignorando projeções de meses anteriores.
 export async function getPerformanceData(userId, year) {
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const currentMonthStr = todayStr.slice(0, 7) // e.g. "2026-05"
+
+  // Balance accumulated up to the end of the previous year
+  let runningBalance = await computeBalanceBeforeMonth(userId, `${year}-01`)
+
   const result = []
-
-  // Calcula o saldo acumulado real até o final do ano anterior
-  const prevYearEnd = new Date(Date.UTC(Number(year) - 1, 11, 31, 23, 59, 59))
-  const priorTransactions = await prisma.transaction.findMany({
-    where: { user_id: userId, date: { lte: prevYearEnd } },
-    orderBy: { date: 'asc' },
-  })
-
-  // Para o saldo inicial do ano precisamos simular todos os meses anteriores
-  // incluindo as projeções de daily_rate — por isso chamamos getThermometerData
-  // de todos os anos anteriores à data mais antiga até o ano solicitado.
-  // Solução pragmática: percorremos os meses do ano atual encadeando o saldo.
-  let runningBalance = priorTransactions.reduce((acc, t) => acc + effectOnBalance(t), 0)
-
-  // Ajuste: o saldo anterior só conta transações reais. Projeções de anos anteriores
-  // não são armazenadas — isso é uma limitação conhecida para dados históricos antigos.
 
   for (let month = 1; month <= 12; month++) {
     const monthStr = `${year}-${String(month).padStart(2, '0')}`
+    const isFuture = monthStr > currentMonthStr
+    const isCurrent = monthStr === currentMonthStr
+
+    if (isFuture) {
+      result.push({ m: MONTH_LABELS[month - 1], end: null, in: null, out: null, series: null, current: false, future: true })
+      continue
+    }
+
     const days = await getThermometerData(userId, monthStr, runningBalance)
-    const lastDay = days[days.length - 1]
+    runningBalance = days[days.length - 1].saldo
 
-    runningBalance = lastDay.saldo
+    const totalIn = parseFloat(days.reduce((acc, d) => acc + d.entrada, 0).toFixed(2))
+    // out = all money that left the account: fixed expenses + daily + card + savings transfer
+    const totalOut = parseFloat(days.reduce((acc, d) => acc + d.saida + d.diario + d.cartao + d.economia, 0).toFixed(2))
 
-    const totalEconomia = days.reduce((acc, d) => acc + d.economia, 0)
-    const totalEntrada = days.reduce((acc, d) => acc + d.entrada, 0)
+    // 5 evenly-spaced balance snapshots for the sparkline (day 1, ~week 1-3, last day)
+    const series = [0, 6, 13, 20, days.length - 1]
+      .filter((v, i, arr) => arr.indexOf(v) === i && v < days.length)
+      .map(i => days[i].saldo)
 
     result.push({
-      month: monthStr,
-      saldo_final: lastDay.saldo,
-      total_economia: parseFloat(totalEconomia.toFixed(2)),
-      total_entrada: parseFloat(totalEntrada.toFixed(2)),
-      percentual_poupado: totalEntrada > 0
-        ? parseFloat(((totalEconomia / totalEntrada) * 100).toFixed(1))
-        : 0,
+      m: MONTH_LABELS[month - 1],
+      end: parseFloat(runningBalance.toFixed(2)),
+      in: totalIn,
+      out: totalOut,
+      series,
+      current: isCurrent,
+      future: false,
     })
   }
 
   return result
-}
-
-function effectOnBalance(transaction) {
-  const amount = Number(transaction.amount)
-  if (transaction.type === 'entrada') return amount
-  if (transaction.type === 'saida') return -amount
-  if (transaction.type === 'diario') return -amount
-  if (transaction.type === 'economia') return -amount
-  return 0
 }

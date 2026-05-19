@@ -1,12 +1,15 @@
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
 
+const RECURRENCE_VALUES = ['não repetir', 'todo dia', 'toda semana', 'todo mês']
+
 const transactionSchema = z.object({
   type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao']),
   category_id: z.string().uuid().optional().nullable(),
   amount: z.number().positive(),
   description: z.string().optional(),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  recurrence: z.enum(RECURRENCE_VALUES).optional().default('não repetir'),
   source: z.enum(['web', 'whatsapp']).optional().default('web'),
 })
 

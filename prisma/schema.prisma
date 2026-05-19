@@ -42,6 +42,7 @@ model Transaction {
   amount      Decimal         @db.Decimal(10, 2)
   description String?         @db.VarChar(255)
   date        DateTime        @db.Date
+  recurrence  String?         @default("não repetir") @db.VarChar(50)
   source      Source          @default(web)
   created_at  DateTime        @default(now())
   user        User            @relation(fields: [user_id], references: [id])
