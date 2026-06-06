@@ -13,6 +13,7 @@ model User {
   email            String           @unique @db.VarChar(150)
   password_hash    String           @db.VarChar(255)
   daily_rate       Decimal          @default(0) @db.Decimal(10, 2)
+  start_date       DateTime?        @db.Date
   created_at       DateTime         @default(now())
   transactions     Transaction[]
   categories       Category[]
@@ -46,6 +47,7 @@ model Transaction {
   description String?         @db.VarChar(255)
   date        DateTime        @db.Date
   recurrence  String?         @default("never") @db.VarChar(50)
+  series_id   String?         @db.Uuid
   source      Source          @default(web)
   created_at  DateTime        @default(now())
   user        User            @relation(fields: [user_id], references: [id])
