@@ -1,5 +1,6 @@
 import { getThermometerData, getPerformanceData } from '../services/thermometerService.js'
 import { ensureMonthSetup } from '../services/monthlySetupService.js'
+import { prisma } from '../lib/prisma.js'
 
 const todayStr = () => new Date().toISOString().slice(0, 7) // "YYYY-MM"
 
@@ -9,13 +10,20 @@ export async function thermometer(req, res) {
     return res.status(400).json({ error: 'Parâmetro month obrigatório (formato: YYYY-MM)' })
   }
 
-  // Generate fixed transactions for this month if it's current or past and not yet set up
   if (month <= todayStr()) {
     await ensureMonthSetup(req.userId, month)
   }
 
-  const data = await getThermometerData(req.userId, month)
-  return res.json(data)
+  const [days, savingsAgg] = await Promise.all([
+    getThermometerData(req.userId, month),
+    prisma.transaction.aggregate({
+      where: { user_id: req.userId, type: 'economia' },
+      _sum: { amount: true },
+    }),
+  ])
+
+  const savings_total = Number(savingsAgg._sum.amount ?? 0)
+  return res.json({ days, savings_total })
 }
 
 export async function performance(req, res) {

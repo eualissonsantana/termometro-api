@@ -8,14 +8,18 @@ const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'S
 async function computeBalanceBeforeMonth(userId, monthStr) {
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { daily_rate: true },
+    select: { daily_rate: true, start_date: true },
   })
   const dailyRate = Number(user.daily_rate)
+  const startDate = user.start_date ? user.start_date.toISOString().slice(0, 10) : null
 
   const monthStartDate = new Date(monthStr + '-01T00:00:00.000Z')
 
+  const dateFilter = { lt: monthStartDate }
+  if (startDate) dateFilter.gte = new Date(startDate + 'T00:00:00.000Z')
+
   const priorTransactions = await prisma.transaction.findMany({
-    where: { user_id: userId, date: { lt: monthStartDate } },
+    where: { user_id: userId, date: dateFilter },
     orderBy: { date: 'asc' },
   })
 
@@ -75,9 +79,10 @@ export async function getThermometerData(userId, month, startingBalance = null) 
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { daily_rate: true },
+    select: { daily_rate: true, start_date: true },
   })
   const dailyRate = Number(user.daily_rate)
+  const startDate = user.start_date ? user.start_date.toISOString().slice(0, 10) : null
 
   const monthStartDate = new Date(Date.UTC(year, m - 1, 1))
   const monthEndDate = new Date(Date.UTC(year, m, 0, 23, 59, 59))
@@ -86,8 +91,13 @@ export async function getThermometerData(userId, month, startingBalance = null) 
     ? startingBalance
     : await computeBalanceBeforeMonth(userId, month)
 
+  // Only fetch transactions from start_date onwards (if configured)
+  const effectiveStart = startDate && startDate > monthStartDate.toISOString().slice(0, 10)
+    ? new Date(startDate + 'T00:00:00.000Z')
+    : monthStartDate
+
   const transactions = await prisma.transaction.findMany({
-    where: { user_id: userId, date: { gte: monthStartDate, lte: monthEndDate } },
+    where: { user_id: userId, date: { gte: effectiveStart, lte: monthEndDate } },
     orderBy: { date: 'asc' },
   })
 
@@ -107,19 +117,26 @@ export async function getThermometerData(userId, month, startingBalance = null) 
     const dayTxs = byDate[dateStr] || []
 
     let income = 0, expense = 0, daily = 0, savings = 0, card = 0
+    let hasDiario = false
     let dailyIsProjected = false
 
-    for (const t of dayTxs) {
-      if (t.type === 'entrada') income += Number(t.amount)
-      else if (t.type === 'saida') expense += Number(t.amount)
-      else if (t.type === 'diario') daily += Number(t.amount)
-      else if (t.type === 'economia') savings += Number(t.amount)
-      else if (t.type === 'cartao') card += Number(t.amount)
-    }
+    // Days before start_date are treated as blank (no transactions, no daily_rate)
+    const isBeforeStart = startDate && dateStr < startDate
 
-    if (daily === 0) {
-      daily = dailyRate
-      dailyIsProjected = true
+    if (!isBeforeStart) {
+      for (const t of dayTxs) {
+        if (t.type === 'entrada') income += Number(t.amount)
+        else if (t.type === 'saida') expense += Number(t.amount)
+        else if (t.type === 'diario') { daily += Number(t.amount); hasDiario = true }
+        else if (t.type === 'economia') savings += Number(t.amount)
+        else if (t.type === 'cartao') card += Number(t.amount)
+      }
+
+      // No diario registered → use projected daily_rate (even if value would be 0)
+      if (!hasDiario) {
+        daily = dailyRate
+        dailyIsProjected = true
+      }
     }
 
     balance += income - expense - daily - savings - card
