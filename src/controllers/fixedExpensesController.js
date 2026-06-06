@@ -3,8 +3,8 @@ import { prisma } from '../lib/prisma.js'
 
 const schema = z.object({
   name: z.string().min(1).max(100),
-  amount: z.number().positive(),
-  due_day: z.number().int().min(1).max(31),
+  amount: z.coerce.number().positive(),
+  due_day: z.coerce.number().int().min(1).max(31),
 })
 
 export async function list(req, res) {

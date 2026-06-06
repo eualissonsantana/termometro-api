@@ -3,7 +3,7 @@ import { prisma } from '../lib/prisma.js'
 
 const schema = z.object({
   name: z.string().min(1).max(100),
-  monthly_amount: z.number().positive(),
+  monthly_amount: z.coerce.number().positive(),
 })
 
 // Recalculates daily_rate as sum(active monthly_amounts) / 31 and saves on the user.
