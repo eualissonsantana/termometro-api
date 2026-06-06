@@ -1,6 +1,6 @@
 import { Router } from 'express'
 import { authenticate } from '../middlewares/authMiddleware.js'
-import { getConfig, updateDailyRate } from '../controllers/configController.js'
+import { getConfig, updateDailyRate, updateStartDate, resetAccount } from '../controllers/configController.js'
 import * as dailyCategories from '../controllers/dailyCategoriesController.js'
 import * as fixedExpenses from '../controllers/fixedExpensesController.js'
 import * as recurringIncomes from '../controllers/recurringIncomesController.js'
@@ -10,6 +10,8 @@ router.use(authenticate)
 
 router.get('/', getConfig)
 router.put('/daily-rate', updateDailyRate)
+router.put('/start-date', updateStartDate)
+router.post('/reset', resetAccount)
 
 router.get('/daily-categories', dailyCategories.list)
 router.post('/daily-categories', dailyCategories.create)
