@@ -8,22 +8,25 @@ datasource db {
 }
 
 model User {
-  id            String          @id @default(uuid())
-  name          String          @db.VarChar(100)
-  email         String          @unique @db.VarChar(150)
-  password_hash String          @db.VarChar(255)
-  daily_rate    Decimal         @default(0) @db.Decimal(10, 2)
-  created_at    DateTime        @default(now())
-  transactions  Transaction[]
-  categories    Category[]
-  monthlyConfig MonthlyConfig[]
+  id               String           @id @default(uuid())
+  name             String           @db.VarChar(100)
+  email            String           @unique @db.VarChar(150)
+  password_hash    String           @db.VarChar(255)
+  daily_rate       Decimal          @default(0) @db.Decimal(10, 2)
+  created_at       DateTime         @default(now())
+  transactions     Transaction[]
+  categories       Category[]
+  dailyCategories  DailyCategory[]
+  fixedExpenses    FixedExpense[]
+  recurringIncomes RecurringIncome[]
+  monthlySetups    MonthlySetup[]
 
   @@map("users")
 }
 
 model Category {
   id           String          @id @default(uuid())
-  user_id      String?         // NULL = categoria padrão do sistema
+  user_id      String?
   type         TransactionType
   name         String          @db.VarChar(100)
   is_default   Boolean         @default(false)
@@ -42,7 +45,7 @@ model Transaction {
   amount      Decimal         @db.Decimal(10, 2)
   description String?         @db.VarChar(255)
   date        DateTime        @db.Date
-  recurrence  String?         @default("não repetir") @db.VarChar(50)
+  recurrence  String?         @default("never") @db.VarChar(50)
   source      Source          @default(web)
   created_at  DateTime        @default(now())
   user        User            @relation(fields: [user_id], references: [id])
@@ -51,15 +54,57 @@ model Transaction {
   @@map("transactions")
 }
 
-model MonthlyConfig {
-  id                String  @id @default(uuid())
-  user_id           String
-  month             String  @db.VarChar(7)
-  recurring_incomes Json?
-  user              User    @relation(fields: [user_id], references: [id])
+// Subcategorias que compõem o daily_rate. Quando o usuário usa esse modelo,
+// o daily_rate é recalculado automaticamente como soma(monthly_amount) / 31.
+model DailyCategory {
+  id             String  @id @default(uuid())
+  user_id        String
+  name           String  @db.VarChar(100)
+  monthly_amount Decimal @db.Decimal(10, 2)
+  active         Boolean @default(true)
+  user           User    @relation(fields: [user_id], references: [id])
+
+  @@map("daily_categories")
+}
+
+// Gastos fixos mensais (aluguel, financiamento, etc.).
+// Geram transações do tipo 'saida' automaticamente ao abrir cada mês.
+model FixedExpense {
+  id      String  @id @default(uuid())
+  user_id String
+  name    String  @db.VarChar(100)
+  amount  Decimal @db.Decimal(10, 2)
+  due_day Int
+  active  Boolean @default(true)
+  user    User    @relation(fields: [user_id], references: [id])
+
+  @@map("fixed_expenses")
+}
+
+// Entradas fixas mensais (salário, freela fixo, etc.).
+// Geram transações do tipo 'entrada' automaticamente ao abrir cada mês.
+model RecurringIncome {
+  id          String  @id @default(uuid())
+  user_id     String
+  name        String  @db.VarChar(100)
+  amount      Decimal @db.Decimal(10, 2)
+  receive_day Int
+  active      Boolean @default(true)
+  user        User    @relation(fields: [user_id], references: [id])
+
+  @@map("recurring_incomes")
+}
+
+// Controla quais meses já tiveram suas transações fixas geradas,
+// evitando duplicatas ao reabrir o mesmo mês.
+model MonthlySetup {
+  id      String @id @default(uuid())
+  user_id String
+  month   String @db.VarChar(7)
+  user    User   @relation(fields: [user_id], references: [id])
 
   @@unique([user_id, month])
-  @@map("monthly_config")
+  @@map("monthly_setups")
 }
 
 enum TransactionType {

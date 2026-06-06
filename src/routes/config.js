@@ -1,14 +1,29 @@
 import { Router } from 'express'
-import { getConfig, updateConfig, getMonthConfig, updateMonthConfig } from '../controllers/configController.js'
 import { authenticate } from '../middlewares/authMiddleware.js'
+import { getConfig, updateDailyRate } from '../controllers/configController.js'
+import * as dailyCategories from '../controllers/dailyCategoriesController.js'
+import * as fixedExpenses from '../controllers/fixedExpensesController.js'
+import * as recurringIncomes from '../controllers/recurringIncomesController.js'
 
 const router = Router()
-
 router.use(authenticate)
 
 router.get('/', getConfig)
-router.put('/', updateConfig)
-router.get('/:month', getMonthConfig)
-router.put('/:month', updateMonthConfig)
+router.put('/daily-rate', updateDailyRate)
+
+router.get('/daily-categories', dailyCategories.list)
+router.post('/daily-categories', dailyCategories.create)
+router.put('/daily-categories/:id', dailyCategories.update)
+router.delete('/daily-categories/:id', dailyCategories.remove)
+
+router.get('/fixed-expenses', fixedExpenses.list)
+router.post('/fixed-expenses', fixedExpenses.create)
+router.put('/fixed-expenses/:id', fixedExpenses.update)
+router.delete('/fixed-expenses/:id', fixedExpenses.remove)
+
+router.get('/recurring-incomes', recurringIncomes.list)
+router.post('/recurring-incomes', recurringIncomes.create)
+router.put('/recurring-incomes/:id', recurringIncomes.update)
+router.delete('/recurring-incomes/:id', recurringIncomes.remove)
 
 export default router
