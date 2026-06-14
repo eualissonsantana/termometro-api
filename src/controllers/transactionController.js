@@ -65,6 +65,45 @@ const transactionSchema = z.object({
   repeat_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
 })
 
+const bulkItemSchema = z.object({
+  type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao']),
+  amount: z.number().min(0),
+  description: z.string().optional().default(''),
+  date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+})
+
+export async function bulkCreate(req, res) {
+  const raw = req.body?.transactions
+  if (!Array.isArray(raw) || raw.length === 0) {
+    return res.status(400).json({ error: 'Envie um array "transactions" com ao menos um item' })
+  }
+  if (raw.length > 2000) {
+    return res.status(400).json({ error: 'Limite de 2000 transações por importação' })
+  }
+
+  const parsed = []
+  for (const item of raw) {
+    const r = bulkItemSchema.safeParse(item)
+    if (!r.success) return res.status(400).json({ error: r.error.flatten().fieldErrors })
+    parsed.push(r.data)
+  }
+
+  const result = await prisma.transaction.createMany({
+    data: parsed.map(t => ({
+      user_id: req.userId,
+      type: t.type,
+      amount: t.amount,
+      description: t.description,
+      date: new Date(t.date),
+      source: 'web',
+      recurrence: 'never',
+    })),
+    skipDuplicates: false,
+  })
+
+  return res.status(201).json({ imported: result.count })
+}
+
 export async function list(req, res) {
   const { month } = req.query
 
