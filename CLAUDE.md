@@ -11,7 +11,30 @@ Sistema web de gestão financeira pessoal baseado no método "Termômetro", com 
 ## Repositórios
 
 - `termometro-api` — Backend Node.js (este repositório)
-- `termometro-web` — Frontend React (repositório separado)
+- `termometro-web` — Frontend React (repositório separado, `/home/alisson/projects/termometro-web`)
+
+---
+
+## Deploy (produção)
+
+| Serviço | Plataforma | URL |
+|---|---|---|
+| API (backend) | Render — Web Service | `termometro-api.onrender.com` |
+| Web (frontend) | Render — Static Site | `termometro-web.onrender.com` |
+| Banco de dados | Supabase — PostgreSQL | projeto `termometro` |
+
+**Variáveis de ambiente da API no Render:**
+- `DATABASE_URL` — URL do pooler de transações do Supabase (porta 6543, `?pgbouncer=true`)
+- `DIRECT_URL` — URL do pooler de sessão do Supabase (porta 5432, usada pelo `prisma migrate deploy`)
+- `JWT_SECRET` — segredo para assinar tokens JWT
+- `NODE_ENV=production`
+- `ALLOWED_ORIGINS` — origens CORS permitidas (ex: `https://termometro-web.onrender.com`)
+
+**Por que Supabase e não o PostgreSQL do Render?**
+O PostgreSQL gratuito do Render expira e é deletado após 90 dias. O Supabase é gratuito e não expira.
+
+**Por que duas URLs no Supabase?**
+O Prisma precisa de uma URL de pooler para queries (`DATABASE_URL`) e de uma URL direta para rodar migrations (`DIRECT_URL`). Isso é configurado no `prisma/schema.prisma` com `directUrl = env("DIRECT_URL")`.
 
 ---
 
@@ -84,6 +107,7 @@ name          VARCHAR(100) NOT NULL
 email         VARCHAR(150) UNIQUE NOT NULL
 password_hash VARCHAR(255) NOT NULL
 daily_rate    DECIMAL(10,2) NOT NULL DEFAULT 0
+start_date    DATE                              -- data de início da conta (para cálculo de saldo)
 created_at    TIMESTAMP DEFAULT NOW()
 ```
 
@@ -122,6 +146,8 @@ category_id UUID REFERENCES categories(id) NULL  -- opcional
 amount      DECIMAL(10,2) NOT NULL
 description VARCHAR(255)
 date        DATE NOT NULL
+recurrence  VARCHAR(50) DEFAULT 'never'           -- 'never' | 'monthly' | 'weekly'
+series_id   UUID                                  -- agrupa transações de uma série recorrente
 source      ENUM('web', 'whatsapp') DEFAULT 'web'
 created_at  TIMESTAMP DEFAULT NOW()
 ```
@@ -144,14 +170,6 @@ O `daily_rate` é calculado como:
 daily_rate = soma(monthly_amount de todas as categorias ativas) / 31
 ```
 
-Exemplo: mercado R$800 + transporte R$200 + farmácia R$100 + lazer R$200 = R$1.300/mês ÷ 31 = **R$41,93/dia**
-
-O usuário tem duas formas de configurar:
-- **Com categorias**: informa o gasto mensal estimado de cada categoria → sistema calcula o `daily_rate`
-- **Direto**: ignora as categorias e informa o `daily_rate` já calculado
-
-Quando o usuário atualiza qualquer categoria, o `daily_rate` é recalculado automaticamente.
-
 ### Tabela `fixed_expenses`
 
 Gastos fixos mensais com valor e dia de vencimento conhecidos.
@@ -159,13 +177,13 @@ Gastos fixos mensais com valor e dia de vencimento conhecidos.
 ```sql
 id          UUID PRIMARY KEY
 user_id     UUID REFERENCES users(id) NOT NULL
-name        VARCHAR(100) NOT NULL   -- ex: "aluguel", "financiamento", "condomínio"
+name        VARCHAR(100) NOT NULL
 amount      DECIMAL(10,2) NOT NULL
 due_day     INTEGER NOT NULL        -- dia do mês (1–31)
 active      BOOLEAN DEFAULT true
 ```
 
-Toda vez que um mês começa (ou quando o usuário abre o mês pela primeira vez), o sistema gera automaticamente as transações `saida` a partir das `fixed_expenses` ativas, com a data do `due_day` do mês correspondente.
+Toda vez que o usuário abre um mês pela primeira vez, o sistema gera automaticamente as transações `saida` a partir das `fixed_expenses` ativas. Controlado pela tabela `monthly_setups`.
 
 ### Tabela `recurring_incomes`
 
@@ -174,15 +192,24 @@ Entradas fixas mensais (salários, aluguéis recebidos, etc.).
 ```sql
 id          UUID PRIMARY KEY
 user_id     UUID REFERENCES users(id) NOT NULL
-name        VARCHAR(100) NOT NULL   -- ex: "salário", "freela fixo"
+name        VARCHAR(100) NOT NULL
 amount      DECIMAL(10,2) NOT NULL
 receive_day INTEGER NOT NULL        -- dia do mês
 active      BOOLEAN DEFAULT true
 ```
 
-Mesma lógica das `fixed_expenses`: gera transações `entrada` automaticamente no início de cada mês.
+### Tabela `monthly_setups`
 
-**Não existe conceito de "household" ou conta compartilhada.** Cada usuário tem seus próprios dados. Se duas pessoas quiserem usar a mesma conta, compartilham o login.
+Controla quais meses já tiveram suas transações fixas geradas, evitando duplicatas.
+
+```sql
+id      UUID PRIMARY KEY
+user_id UUID REFERENCES users(id) NOT NULL
+month   VARCHAR(7) NOT NULL   -- ex: "2026-07"
+UNIQUE(user_id, month)
+```
+
+**Não existe conceito de "household" ou conta compartilhada.** Cada usuário tem seus próprios dados.
 
 ---
 
@@ -190,21 +217,24 @@ Mesma lógica das `fixed_expenses`: gera transações `entrada` automaticamente 
 
 ### Backend (`termometro-api`)
 
-- **Runtime**: Node.js
+- **Runtime**: Node.js (ESM — `"type": "module"`)
 - **Framework**: Express.js
-- **ORM**: Prisma
-- **Banco**: PostgreSQL
+- **ORM**: Prisma (com `directUrl` para funcionar com o pooler do Supabase)
+- **Banco**: PostgreSQL via Supabase
 - **Autenticação**: JWT (jsonwebtoken) + bcrypt para hash de senha
-- **WhatsApp**: Baileys (biblioteca Node.js, self-hosted, gratuita)
+- **WhatsApp**: Baileys (planejado — não implementado ainda)
 - **Validação**: Zod
+- **CORS**: configurado via env var `ALLOWED_ORIGINS`
 
 ### Frontend (`termometro-web`)
 
 - **Framework**: React + Vite
-- **Estilo**: Tailwind CSS
+- **Estilo**: Tailwind CSS + CSS custom (classes `tm-*` desktop, `tmm-*` mobile)
 - **Gráficos**: Recharts
-- **HTTP**: Axios ou fetch nativo
+- **CSV import**: PapaParse
+- **HTTP**: fetch nativo via `src/services/api.js`
 - **Autenticação**: token JWT armazenado em localStorage
+- **Responsividade**: hook `useIsMobile()` — renderiza `MobileApp` (≤768px) ou rotas desktop (>768px)
 
 ---
 
@@ -213,27 +243,64 @@ Mesma lógica das `fixed_expenses`: gera transações `entrada` automaticamente 
 ```
 termometro-api/
   prisma/
-    schema.prisma
+    schema.prisma         ← modelos + directUrl para Supabase
+    seed.js               ← categorias padrão do sistema
+    migrations/           ← histórico de migrations (rodam via prisma migrate deploy no start)
   src/
     routes/
       auth.js
-      transactions.js
+      transactions.js     ← inclui rota POST /bulk
       dashboard.js
       config.js
+      categories.js
     controllers/
       authController.js
-      transactionController.js
+      transactionController.js   ← inclui bulkCreate (até 2000 itens)
       dashboardController.js
       configController.js
+      categoriesController.js
     middlewares/
       authMiddleware.js     ← valida o JWT em toda rota protegida
     services/
       thermometerService.js ← lógica de cálculo do saldo e projeção
-      whatsappService.js    ← integração Baileys
-      parserService.js      ← interpreta mensagens do WhatsApp em português
-    app.js
+    app.js                  ← CORS via ALLOWED_ORIGINS
     server.js
   .env
+```
+
+## Estrutura de pastas do frontend
+
+```
+termometro-web/
+  src/
+    components/
+      mobile/
+        MobileHeader.jsx    ← hero saldo + nav de mês + barra termômetro
+        MonthThermo.jsx     ← 31 barras de saldo (altura proporcional)
+        AgendaList.jsx      ← lista de dias agrupada por semana
+        BottomNav.jsx       ← navegação inferior (Mês | Análises | FAB | Ajustes)
+        LaunchSheet.jsx     ← bottom sheet para lançar transação
+        DayDetailSheet.jsx  ← bottom sheet com movimentos do dia
+        MobileAnalytics.jsx ← grid de KPIs + cards de performance por ano
+        MobileSettings.jsx  ← abas: conta / faixas / fixas / entradas / dados
+      ImportModal.jsx       ← importação de planilha CSV (12 meses lado a lado)
+      DayCard.jsx
+      DayDetailModal.jsx
+      TopBar.jsx
+    hooks/
+      useIsMobile.js        ← observa window.innerWidth, retorna boolean
+      useDashboard.js       ← busca thermometer + performance, calcula kpis e monthContext
+      useTransactions.js
+    pages/
+      MobileApp.jsx         ← orquestrador mobile (tela: cal | ana | set; sheet: null | lancar | detail)
+      Dashboard.jsx         ← layout desktop (calendário + KPIs contextuais)
+      Analytics.jsx
+      Settings.jsx
+    services/
+      api.js                ← todas as chamadas HTTP, inclui bulkCreateTransactions
+    utils/
+      format.js             ← enrichDay (isToday só verdadeiro no mês atual), fmtBRL, addMonth
+      importParser.js       ← parsePlanilha: lê CSV com 12 meses lado a lado (offsets 0,6,12...)
 ```
 
 ---
@@ -252,6 +319,7 @@ POST /api/auth/login      → retorna JWT token
 ```
 GET    /api/transactions?month=2026-05   → lista transações do mês (inclui nome da categoria)
 POST   /api/transactions                 → cria transação (category_id opcional)
+POST   /api/transactions/bulk            → importação em lote (até 2000 itens)
 PUT    /api/transactions/:id             → edita transação
 DELETE /api/transactions/:id             → remove transação
 ```
@@ -278,59 +346,79 @@ GET /api/dashboard/performance?year=2026
 ### Configuração (protegidas)
 
 ```
-GET /api/config                     → busca daily_rate, categorias e config geral
-PUT /api/config/daily-rate          → atualiza daily_rate manualmente
+GET /api/config                           → busca daily_rate e config geral
+PUT /api/config/daily-rate                → atualiza daily_rate manualmente
 
-GET  /api/config/daily-categories   → lista categorias do diário
-POST /api/config/daily-categories   → cria categoria
-PUT  /api/config/daily-categories/:id → atualiza categoria
-DEL  /api/config/daily-categories/:id → remove categoria
+GET  /api/config/daily-categories         → lista categorias do diário
+POST /api/config/daily-categories         → cria categoria
+PUT  /api/config/daily-categories/:id     → atualiza categoria
+DEL  /api/config/daily-categories/:id     → remove categoria
 
-GET  /api/config/fixed-expenses     → lista gastos fixos mensais
-POST /api/config/fixed-expenses     → cria gasto fixo (nome, valor, dia)
-PUT  /api/config/fixed-expenses/:id → atualiza gasto fixo
-DEL  /api/config/fixed-expenses/:id → remove gasto fixo
+GET  /api/config/fixed-expenses           → lista gastos fixos mensais
+POST /api/config/fixed-expenses           → cria gasto fixo (nome, valor, dia)
+PUT  /api/config/fixed-expenses/:id       → atualiza gasto fixo
+DEL  /api/config/fixed-expenses/:id       → remove gasto fixo
 
-GET  /api/config/recurring-incomes  → lista entradas recorrentes
-POST /api/config/recurring-incomes  → cria entrada recorrente
-PUT  /api/config/recurring-incomes/:id → atualiza
-DEL  /api/config/recurring-incomes/:id → remove
+GET  /api/config/recurring-incomes        → lista entradas recorrentes
+POST /api/config/recurring-incomes        → cria entrada recorrente
+PUT  /api/config/recurring-incomes/:id    → atualiza
+DEL  /api/config/recurring-incomes/:id    → remove
 ```
 
 ---
 
 ## Lógica do termômetro (thermometerService)
 
-O serviço mais importante do projeto. Para um dado mês, retorna um array com 31 posições (uma por dia) contendo:
+O serviço mais importante do projeto. Para um dado mês, retorna um array com dias do mês contendo:
 
 ```js
 {
   day: 1,
   date: "2026-05-01",
-  entrada: 5500,          // soma das entradas do dia
-  saida: 700,             // soma das saídas fixas do dia
+  weekday: 4,             // 0 = domingo, usado para agrupar semanas na agenda
+  entrada: 5500,
+  saida: 700,
   diario: 67.10,          // real se lançado, daily_rate se não
   diario_projetado: true/false,
-  cartao: 0,              // soma dos gastos de cartão do dia
-  diario_categorias: {    // breakdown opcional se o usuário usa categorias
-    mercado: 25.00,
-    transporte: 15.00,
-    farmacia: 10.00,
-    lazer: 17.10
-  },
+  cartao: 0,
   economia: 0,
   saldo: 12450.30,        // acumulado desde o início da conta
   is_future: false
 }
 ```
 
-O saldo de cada dia é calculado aplicando todas as transações anteriores (de toda a história da conta) + as do dia atual.
+### monthContext e KPIs contextuais
+
+O frontend calcula `monthContext` em `useDashboard.js` comparando o mês visualizado com o mês atual:
+
+| monthContext | heroLabel | heroValue | sideLabel | sideValue |
+|---|---|---|---|---|
+| `past` | Saldo final | saldoFim | performance | variacao |
+| `current` | Saldo · hoje | saldoHoje | projeção · fim | saldoFim |
+| `future` | Projeção · início | saldoInicio | projeção · fim | saldoFim |
+
+### Regra isToday
+
+`isToday` só é `true` quando o mês visualizado é o mês atual (`isCurrentMonth`). Em meses passados ou futuros, nenhum dia é "hoje". Implementado em `enrichDay(apiDay, todayNum, isCurrentMonth)` em `src/utils/format.js`.
 
 ---
 
-## Integração WhatsApp (Baileys)
+## Importação de planilha CSV
 
-O usuário conecta via QR Code (igual ao WhatsApp Web). O bot interpreta mensagens em português:
+O usuário pode importar dados históricos via `ImportModal`. O formato esperado é a planilha do método Termômetro com **12 meses lado a lado**, onde cada mês ocupa 6 colunas (Data, Entrada, Saída, Diário, Saldo + 1 vazia de separação).
+
+```
+Offsets de colunas: [0, 6, 12, 18, 24, 30, 36, 42, 48, 54, 60, 66]
+Colunas por mês:    Data | Entrada | Saída | Diário | Saldo | (vazia)
+```
+
+O `parsePlanilha(csvText, year)` em `src/utils/importParser.js` lê o CSV, detecta meses com diário projetado (valores uniformes = estimativa, não real) e retorna um array de meses para seleção antes do import. O import usa `POST /api/transactions/bulk` em lotes de 200.
+
+---
+
+## Integração WhatsApp (Baileys) — planejada, não implementada
+
+O usuário conectaria via QR Code (igual ao WhatsApp Web). O bot interpretaria mensagens em português:
 
 | mensagem enviada | ação |
 |---|---|
@@ -341,8 +429,6 @@ O usuário conecta via QR Code (igual ao WhatsApp Web). O bot interpreta mensage
 | `saldo` | retorna saldo atual |
 | `resumo` | retorna resumo do mês atual |
 | `projeção` | retorna saldo projetado para o fim do mês |
-
-O `parserService` interpreta o texto livre usando regex simples — sem IA, apenas padrões em português.
 
 ---
 
@@ -356,6 +442,7 @@ Como o projeto é também didático, ao longo do código explique:
 - **REST**: diferença entre GET/POST/PUT/DELETE, quando usar cada um
 - **Status HTTP**: 200, 201, 400, 401, 404, 500 — quando retornar cada um
 - **Variáveis de ambiente**: por que o `.env` nunca vai pro git
+- **Connection pooler**: por que o Supabase precisa de duas URLs (queries vs migrations)
 
 ---
 
@@ -364,29 +451,49 @@ Como o projeto é também didático, ao longo do código explique:
 - **OS**: WSL (Ubuntu) no Windows
 - **Editor**: VSCode com extensão Remote - WSL
 - **Node**: versão LTS mais recente
-- **Banco local**: PostgreSQL rodando no WSL
+- **Banco local**: PostgreSQL rodando no WSL (ou usar a string do Supabase direto)
 
 ---
 
-## O que já foi construído no backend
+## O que já foi construído
 
+### Backend
 - Auth completa (register + login com JWT)
 - CRUD de transações com filtro por mês
-- Dashboard: thermometer (31 dias com saldo real/projetado) e performance anual
-- Configuração de daily_rate
+- Importação em lote de transações (`POST /bulk`, até 2000 itens)
+- Dashboard: thermometer (dias com saldo real/projetado) e performance anual
+- Configuração de daily_rate (manual ou via categorias)
+- Tabelas e rotas: categories (com seed), daily_categories, fixed_expenses, recurring_incomes
+- Geração automática de transações fixas ao abrir o mês (monthly_setups)
+- CORS configurado via variável de ambiente
+- Deploy no Render com Supabase como banco
 
-## O que ainda precisa ser feito no backend
-
-- Tabela `categories` com seed de categorias padrão
-- Campo `category_id` em `transactions`
-- Rotas `/api/categories`
-- Tabelas `daily_categories`, `fixed_expenses`, `recurring_incomes`
-- Integração WhatsApp (Baileys)
+### Frontend
+- Layout desktop: calendário mensal com KPIs contextuais por mês
+- Layout mobile Phase 2: agenda por semana, barra termômetro, bottom nav, bottom sheets
+- KPIs contextuais: labels e valores mudam conforme mês passado / atual / futuro
+- Importação de planilha CSV no formato do método Termômetro
+- Hook `useIsMobile` para renderizar mobile ou desktop conforme largura da tela
+- Deploy no Render como Static Site
 
 ---
 
-## O que ainda não foi decidido
+## Backlog de melhorias (próximas sessões)
 
-- Deploy (Railway ou Render para começar de graça)
-- Design visual do frontend (minimalista, com seção de analytics com gráficos)
-- Internacionalização (por ora só português, moeda BRL)
+### Alta prioridade
+- **Integração WhatsApp (Baileys)** — lançar transações e consultar saldo via WhatsApp
+- **Recorrência de transações** — campos `recurrence` e `series_id` já existem no schema, falta implementar a lógica de editar/deletar "esta e as próximas" ou "todas da série"
+- **Gestão de categorias no frontend** — tela para criar e editar categorias personalizadas (backend já tem as rotas)
+
+### Média prioridade
+- **Notificações de faixa** — alertar quando o saldo atingir faixa amarela ou vermelha (email ou push)
+- **Meta de economia mensal** — o usuário define quanto quer guardar no mês e o dashboard mostra progresso
+- **Exportação de dados** — gerar PDF ou CSV do histórico do mês/ano
+- **PWA (Progressive Web App)** — manifest + service worker para instalar o app no celular como app nativo
+
+### Baixa prioridade / exploratório
+- **Integração bancária (Open Finance)** — importar extratos automaticamente via API do banco
+- **Análise por categoria** — gráfico de pizza mostrando distribuição de gastos por categoria no mês
+- **Comparativo mensal** — quanto gastou nesta categoria em relação ao mês anterior
+- **IA no WhatsApp** — interpretar mensagens mais complexas com Claude API ao invés de regex simples
+- **Multi-moeda** — suporte a dólar e euro para quem tem renda ou gastos em outras moedas
