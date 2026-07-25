@@ -9,7 +9,7 @@ import categoriesRoutes from './routes/categories.js'
 const app = express()
 
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS
-  ? process.env.ALLOWED_ORIGINS.split(',')
+  ? process.env.ALLOWED_ORIGINS.split(',').map(origin => origin.trim()).filter(Boolean)
   : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:5175']
 
 app.use(cors({ origin: ALLOWED_ORIGINS, credentials: true }))

@@ -19,7 +19,7 @@ npm install
 
 # 2. Configurar variáveis de ambiente
 cp .env.example .env
-# Edite o .env com sua DATABASE_URL e JWT_SECRET
+# Edite o .env com sua DATABASE_URL, DIRECT_URL e JWT_SECRET
 
 # 3. Criar as tabelas
 npm run db:migrate
@@ -36,10 +36,23 @@ npm run dev
 Crie um arquivo `.env` na raiz com:
 
 ```env
-DATABASE_URL="postgresql://usuario:senha@localhost:5432/termometro"
+# Runtime da aplicacao (Prisma Client)
+DATABASE_URL="postgresql://prisma.[PROJECT-REF]:[PASSWORD]@[REGION].pooler.supabase.com:6543/postgres?pgbouncer=true"
+
+# Migrations do Prisma
+DIRECT_URL="postgresql://prisma.[PROJECT-REF]:[PASSWORD]@[REGION].pooler.supabase.com:5432/postgres"
+
 JWT_SECRET="uma-chave-secreta-longa"
 PORT=3000
+ALLOWED_ORIGINS="http://localhost:5173,https://termometro-web.onrender.com"
 ```
+
+### Supabase + Prisma no Render
+
+- `DATABASE_URL`: URL do pooler do Supabase para queries da aplicacao
+- `DIRECT_URL`: URL sem pool de transacao para `prisma migrate deploy`
+- Se `DIRECT_URL` nao estiver configurada, o startup falha antes do servidor subir
+- No Render, o comando de start roda `prisma migrate deploy` antes de iniciar a API
 
 ## Rotas da API
 

@@ -7,7 +7,7 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "build": "prisma generate",
-    "start": "prisma migrate deploy && node src/server.js",
+    "start": "node scripts/check-env.js && prisma migrate deploy && node src/server.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
