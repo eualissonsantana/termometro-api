@@ -5,10 +5,11 @@
   "main": "src/server.js",
   "type": "module",
   "scripts": {
+    "postinstall": "prisma generate",
     "dev": "node --watch src/server.js",
     "dev:all": "bash scripts/dev-all.sh",
     "build": "prisma generate",
-    "start": "node scripts/check-env.js && prisma migrate deploy && node src/server.js",
+    "start": "node scripts/check-env.js && prisma generate && prisma migrate deploy && node src/server.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
