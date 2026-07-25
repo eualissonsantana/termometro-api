@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js'
+import { ensureMonthSetup } from './monthlySetupService.js'
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
@@ -177,6 +178,8 @@ export async function getPerformanceData(userId, year) {
       result.push({ m: MONTH_LABELS[month - 1], end: null, in: null, out: null, series: null, current: false, future: true })
       continue
     }
+
+    await ensureMonthSetup(userId, monthStr)
 
     const days = await getThermometerData(userId, monthStr, runningBalance)
     runningBalance = days[days.length - 1].saldo

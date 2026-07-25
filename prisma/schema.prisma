@@ -9,19 +9,22 @@ datasource db {
 }
 
 model User {
-  id               String           @id @default(uuid())
-  name             String           @db.VarChar(100)
-  email            String           @unique @db.VarChar(150)
-  password_hash    String           @db.VarChar(255)
-  daily_rate       Decimal          @default(0) @db.Decimal(10, 2)
-  start_date       DateTime?        @db.Date
-  created_at       DateTime         @default(now())
-  transactions     Transaction[]
-  categories       Category[]
-  dailyCategories  DailyCategory[]
-  fixedExpenses    FixedExpense[]
-  recurringIncomes RecurringIncome[]
-  monthlySetups    MonthlySetup[]
+  id                    String           @id @default(uuid())
+  name                  String           @db.VarChar(100)
+  email                 String           @unique @db.VarChar(150)
+  password_hash         String           @db.VarChar(255)
+  daily_rate            Decimal          @default(0) @db.Decimal(10, 2)
+  start_date            DateTime?        @db.Date
+  monthly_budget_total  Decimal?         @db.Decimal(10, 2)
+  monthly_savings_goal  Decimal?         @db.Decimal(10, 2)
+  created_at            DateTime         @default(now())
+  transactions          Transaction[]
+  categories            Category[]
+  dailyCategories       DailyCategory[]
+  fixedExpenses         FixedExpense[]
+  recurringIncomes      RecurringIncome[]
+  monthlySetups         MonthlySetup[]
+  monthlyPlans          MonthlyPlan[]
 
   @@map("users")
 }
@@ -73,13 +76,14 @@ model DailyCategory {
 // Gastos fixos mensais (aluguel, financiamento, etc.).
 // Geram transações do tipo 'saida' automaticamente ao abrir cada mês.
 model FixedExpense {
-  id      String  @id @default(uuid())
-  user_id String
-  name    String  @db.VarChar(100)
-  amount  Decimal @db.Decimal(10, 2)
-  due_day Int
-  active  Boolean @default(true)
-  user    User    @relation(fields: [user_id], references: [id])
+  id         String    @id @default(uuid())
+  user_id    String
+  name       String    @db.VarChar(100)
+  amount     Decimal   @db.Decimal(10, 2)
+  due_day    Int
+  start_date DateTime? @db.Date
+  active     Boolean   @default(true)
+  user       User      @relation(fields: [user_id], references: [id])
 
   @@map("fixed_expenses")
 }
@@ -108,6 +112,18 @@ model MonthlySetup {
 
   @@unique([user_id, month])
   @@map("monthly_setups")
+}
+
+model MonthlyPlan {
+  id                    String   @id @default(uuid())
+  user_id               String
+  month                 String   @db.VarChar(7)
+  budget_total_override Decimal? @db.Decimal(10, 2)
+  savings_goal_override Decimal? @db.Decimal(10, 2)
+  user                  User     @relation(fields: [user_id], references: [id])
+
+  @@unique([user_id, month])
+  @@map("monthly_plans")
 }
 
 enum TransactionType {

@@ -6,6 +6,7 @@
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.js",
+    "dev:all": "bash scripts/dev-all.sh",
     "build": "prisma generate",
     "start": "node scripts/check-env.js && prisma migrate deploy && node src/server.js",
     "db:migrate": "prisma migrate dev",
