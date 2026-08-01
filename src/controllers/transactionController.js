@@ -3,6 +3,39 @@ import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma.js'
 
 const RECURRENCE_VALUES = ['never', 'daily', 'weekly', 'monthly']
+const TRANSACTION_TYPES = ['entrada', 'saida', 'diario', 'economia', 'cartao']
+const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/)
+const dateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
+
+function parseCsvQueryValue(value) {
+  if (value == null) return []
+  const raw = Array.isArray(value) ? value.join(',') : String(value)
+  return raw
+    .split(',')
+    .map(item => item.trim())
+    .filter(Boolean)
+}
+
+function startOfMonthUtc(monthStr) {
+  const [year, month] = monthStr.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, 1))
+}
+
+function nextMonthUtc(monthStr) {
+  const [year, month] = monthStr.split('-').map(Number)
+  return new Date(Date.UTC(year, month, 1))
+}
+
+function startOfDayUtc(dateStr) {
+  const [year, month, day] = dateStr.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day))
+}
+
+function nextDayUtc(dateStr) {
+  const date = startOfDayUtc(dateStr)
+  date.setUTCDate(date.getUTCDate() + 1)
+  return date
+}
 
 // Returns additional dates (after the primary date) to generate for the given recurrence.
 // repeatCount: max number of extra dates to generate
@@ -105,15 +138,74 @@ export async function bulkCreate(req, res) {
 }
 
 export async function list(req, res) {
-  const { month } = req.query
+  const month = req.query.month
+  const from = req.query.from
+  const to = req.query.to
+  const typeValues = parseCsvQueryValue(req.query.types)
+  const categoryIds = parseCsvQueryValue(req.query.category_ids)
 
   const where = { user_id: req.userId }
 
+  if (month != null) {
+    const parsedMonth = monthQuerySchema.safeParse(month)
+    if (!parsedMonth.success) {
+      return res.status(400).json({ error: 'Parâmetro month inválido (formato: YYYY-MM)' })
+    }
+  }
+
+  if (from != null) {
+    const parsedFrom = dateQuerySchema.safeParse(from)
+    if (!parsedFrom.success) {
+      return res.status(400).json({ error: 'Parâmetro from inválido (formato: YYYY-MM-DD)' })
+    }
+  }
+
+  if (to != null) {
+    const parsedTo = dateQuerySchema.safeParse(to)
+    if (!parsedTo.success) {
+      return res.status(400).json({ error: 'Parâmetro to inválido (formato: YYYY-MM-DD)' })
+    }
+  }
+
+  if (month && (from || to)) {
+    return res.status(400).json({ error: 'Use month ou from/to, mas não os dois ao mesmo tempo' })
+  }
+
+  if ((from && !to) || (!from && to)) {
+    return res.status(400).json({ error: 'Envie from e to juntos para filtrar por período' })
+  }
+
+  if (from && to && from > to) {
+    return res.status(400).json({ error: 'O período informado é inválido: from não pode ser maior que to' })
+  }
+
+  if (typeValues.length > 0) {
+    const parsedTypes = z.array(z.enum(TRANSACTION_TYPES)).safeParse(typeValues)
+    if (!parsedTypes.success) {
+      return res.status(400).json({ error: 'Parâmetro types inválido' })
+    }
+
+    where.type = { in: parsedTypes.data }
+  }
+
+  if (categoryIds.length > 0) {
+    const parsedCategoryIds = z.array(z.string().uuid()).safeParse(categoryIds)
+    if (!parsedCategoryIds.success) {
+      return res.status(400).json({ error: 'Parâmetro category_ids inválido' })
+    }
+
+    where.category_id = { in: parsedCategoryIds.data }
+  }
+
   if (month) {
-    const [year, m] = month.split('-')
-    const start = new Date(Date.UTC(Number(year), Number(m) - 1, 1))
-    const end = new Date(Date.UTC(Number(year), Number(m), 1))
+    const start = startOfMonthUtc(month)
+    const end = nextMonthUtc(month)
     where.date = { gte: start, lt: end }
+  } else if (from && to) {
+    where.date = {
+      gte: startOfDayUtc(from),
+      lt: nextDayUtc(to),
+    }
   }
 
   const transactions = await prisma.transaction.findMany({
