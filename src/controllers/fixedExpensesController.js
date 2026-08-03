@@ -23,7 +23,7 @@ function serializeExpense(expense) {
 export async function list(req, res) {
   const expenses = await prisma.fixedExpense.findMany({
     where: { user_id: req.userId },
-    orderBy: { due_day: 'asc' },
+    orderBy: { amount: 'desc' },
   })
   return res.json(expenses.map(serializeExpense))
 }

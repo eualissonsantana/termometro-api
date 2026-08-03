@@ -91,13 +91,14 @@ model FixedExpense {
 // Entradas fixas mensais (salário, freela fixo, etc.).
 // Geram transações do tipo 'entrada' automaticamente ao abrir cada mês.
 model RecurringIncome {
-  id          String  @id @default(uuid())
+  id          String    @id @default(uuid())
   user_id     String
-  name        String  @db.VarChar(100)
-  amount      Decimal @db.Decimal(10, 2)
+  name        String    @db.VarChar(100)
+  amount      Decimal   @db.Decimal(10, 2)
   receive_day Int
-  active      Boolean @default(true)
-  user        User    @relation(fields: [user_id], references: [id])
+  start_date  DateTime? @db.Date
+  active      Boolean   @default(true)
+  user        User      @relation(fields: [user_id], references: [id])
 
   @@map("recurring_incomes")
 }

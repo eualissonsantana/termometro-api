@@ -10,14 +10,22 @@ const schema = z.object({
   name: z.string().min(1).max(100),
   amount: z.coerce.number().positive(),
   receive_day: z.coerce.number().int().min(1).max(31),
+  start_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).nullable().optional(),
 })
+
+function serializeIncome(income) {
+  return {
+    ...income,
+    start_date: income.start_date ? income.start_date.toISOString().slice(0, 10) : null,
+  }
+}
 
 export async function list(req, res) {
   const incomes = await prisma.recurringIncome.findMany({
     where: { user_id: req.userId },
-    orderBy: { receive_day: 'asc' },
+    orderBy: { amount: 'desc' },
   })
-  return res.json(incomes)
+  return res.json(incomes.map(serializeIncome))
 }
 
 export async function create(req, res) {
@@ -27,11 +35,15 @@ export async function create(req, res) {
   }
 
   const income = await prisma.recurringIncome.create({
-    data: { user_id: req.userId, ...result.data },
+    data: {
+      user_id: req.userId,
+      ...result.data,
+      start_date: result.data.start_date ? new Date(`${result.data.start_date}T00:00:00.000Z`) : null,
+    },
   })
 
   await syncCreatedConfigToCurrentMonth(req.userId, 'recurring-income', income)
-  return res.status(201).json(income)
+  return res.status(201).json(serializeIncome(income))
 }
 
 export async function update(req, res) {
@@ -46,9 +58,17 @@ export async function update(req, res) {
     return res.status(400).json({ error: result.error.flatten().fieldErrors })
   }
 
-  const income = await prisma.recurringIncome.update({ where: { id }, data: result.data })
+  const income = await prisma.recurringIncome.update({
+    where: { id },
+    data: {
+      ...result.data,
+      ...(Object.prototype.hasOwnProperty.call(result.data, 'start_date')
+        ? { start_date: result.data.start_date ? new Date(`${result.data.start_date}T00:00:00.000Z`) : null }
+        : {}),
+    },
+  })
   await syncUpdatedConfigToCurrentMonth(req.userId, 'recurring-income', existing, income)
-  return res.json(income)
+  return res.json(serializeIncome(income))
 }
 
 export async function remove(req, res) {
