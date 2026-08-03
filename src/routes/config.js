@@ -13,6 +13,7 @@ import {
 import * as dailyCategories from '../controllers/dailyCategoriesController.js'
 import * as fixedExpenses from '../controllers/fixedExpensesController.js'
 import * as recurringIncomes from '../controllers/recurringIncomesController.js'
+import * as recurringSeries from '../controllers/recurringSeriesController.js'
 
 const router = Router()
 router.use(authenticate)
@@ -40,5 +41,8 @@ router.get('/recurring-incomes', recurringIncomes.list)
 router.post('/recurring-incomes', recurringIncomes.create)
 router.put('/recurring-incomes/:id', recurringIncomes.update)
 router.delete('/recurring-incomes/:id', recurringIncomes.remove)
+
+router.get('/recurring-series', recurringSeries.list)
+router.delete('/recurring-series/:series_id', recurringSeries.remove)
 
 export default router
