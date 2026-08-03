@@ -11,9 +11,7 @@ export async function thermometer(req, res) {
     return res.status(400).json({ error: 'Parâmetro month obrigatório (formato: YYYY-MM)' })
   }
 
-  if (month <= todayStr()) {
-    await ensureMonthSetup(req.userId, month)
-  }
+  await ensureMonthSetup(req.userId, month)
 
   const { start, end } = getMonthDateRange(month)
 
