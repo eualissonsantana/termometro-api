@@ -96,6 +96,7 @@ const transactionSchema = z.object({
   source: z.enum(['web', 'whatsapp']).optional().default('web'),
   repeat_count: z.coerce.number().int().positive().optional().nullable(),
   repeat_until: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional().nullable(),
+  paid: z.boolean().optional().nullable(),
 })
 
 const bulkItemSchema = z.object({
@@ -227,7 +228,10 @@ export async function create(req, res) {
     return res.status(400).json({ error: result.error.flatten().fieldErrors })
   }
 
-  const { date, category_id, recurrence, repeat_count, repeat_until, ...rest } = result.data
+  const { date, category_id, recurrence, repeat_count, repeat_until, paid: paidRaw, ...rest } = result.data
+
+  // paid não se aplica ao tipo diário (gastos variáveis diários não são "contas a pagar")
+  const paid = rest.type === 'diario' ? null : (paidRaw ?? null)
 
   if (rest.amount === 0 && rest.type !== 'diario') {
     return res.status(400).json({ error: 'Valor zero só é permitido para o tipo diário' })
@@ -249,7 +253,7 @@ export async function create(req, res) {
   }
 
   const seriesId = recurrence !== 'never' ? randomUUID() : null
-  const baseData = { ...rest, recurrence, series_id: seriesId, category_id: category_id ?? null, user_id: req.userId }
+  const baseData = { ...rest, paid, recurrence, series_id: seriesId, category_id: category_id ?? null, user_id: req.userId }
 
   const transaction = await prisma.transaction.create({
     data: { ...baseData, date: new Date(date) },
@@ -284,8 +288,10 @@ export async function update(req, res) {
     return res.status(400).json({ error: result.error.flatten().fieldErrors })
   }
 
-  const { date, category_id, repeat_count, repeat_until, ...rest } = result.data
+  const { date, category_id, repeat_count, repeat_until, paid: paidRaw, ...rest } = result.data
   const finalType = rest.type ?? existing.type
+  // paid nunca se propaga para outros registros da série — é sempre por ocorrência
+  const paid = finalType === 'diario' ? null : (paidRaw !== undefined ? (paidRaw ?? null) : undefined)
 
   if (category_id) {
     const category = await prisma.category.findFirst({
@@ -304,15 +310,23 @@ export async function update(req, res) {
   const data = { ...rest }
   if (date) data.date = new Date(date)
   if ('category_id' in result.data) data.category_id = category_id ?? null
+  // paid é excluído do data coletivo — será aplicado individualmente ao registro atual
+  if (paid !== undefined) data.paid = paid
 
   if (scope !== 'one' && existing.series_id) {
     const where = { series_id: existing.series_id, user_id: req.userId }
     if (scope === 'future') where.date = { gte: existing.date }
     // updateMany não aceita date dentro do data (só campos simples), então
-    // extraímos date separado e fazemos update individual no registro atual
-    const { date: _d, ...dataWithoutDate } = data
-    await prisma.transaction.updateMany({ where, data: dataWithoutDate })
-    if (data.date) await prisma.transaction.update({ where: { id }, data: { date: data.date } })
+    // extraímos date separado e fazemos update individual no registro atual.
+    // paid também é excluído do updateMany pois é sempre por ocorrência.
+    const { date: _d, paid: _p, ...dataForMany } = data
+    await prisma.transaction.updateMany({ where, data: dataForMany })
+    const individualUpdate = {}
+    if (data.date) individualUpdate.date = data.date
+    if (paid !== undefined) individualUpdate.paid = paid
+    if (Object.keys(individualUpdate).length > 0) {
+      await prisma.transaction.update({ where: { id }, data: individualUpdate })
+    }
   } else {
     await prisma.transaction.update({ where: { id }, data })
   }
