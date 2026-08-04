@@ -53,6 +53,7 @@ model Transaction {
   recurrence  String?         @default("never") @db.VarChar(50)
   series_id   String?         @db.Uuid
   source      Source          @default(web)
+  paid        Boolean?
   created_at  DateTime        @default(now())
   user        User            @relation(fields: [user_id], references: [id])
   category    Category?       @relation(fields: [category_id], references: [id])
