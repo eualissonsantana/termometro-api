@@ -5,6 +5,7 @@ function serializeConfig(user) {
   return {
     ...user,
     daily_rate: Number(user.daily_rate ?? 0),
+    reserve_starting_balance: Number(user.reserve_starting_balance ?? 0),
     monthly_budget_total: user.monthly_budget_total == null ? null : Number(user.monthly_budget_total),
     monthly_savings_goal: user.monthly_savings_goal == null ? null : Number(user.monthly_savings_goal),
     start_date: user.start_date ? user.start_date.toISOString().slice(0, 10) : null,
@@ -12,6 +13,7 @@ function serializeConfig(user) {
 }
 
 const planningValueSchema = z.union([z.coerce.number().nonnegative(), z.null()])
+const reserveStartingBalanceSchema = z.coerce.number().nonnegative()
 const monthSchema = z.string().regex(/^\d{4}-\d{2}$/)
 
 function serializeMonthlyPlan(plan, userConfig, month) {
@@ -38,6 +40,7 @@ export async function getConfig(req, res) {
       name: true,
       email: true,
       daily_rate: true,
+      reserve_starting_balance: true,
       start_date: true,
       monthly_budget_total: true,
       monthly_savings_goal: true,
@@ -62,6 +65,7 @@ export async function updateDailyRate(req, res) {
       name: true,
       email: true,
       daily_rate: true,
+      reserve_starting_balance: true,
       start_date: true,
       monthly_budget_total: true,
       monthly_savings_goal: true,
@@ -88,6 +92,32 @@ export async function updateStartDate(req, res) {
       name: true,
       email: true,
       daily_rate: true,
+      reserve_starting_balance: true,
+      start_date: true,
+      monthly_budget_total: true,
+      monthly_savings_goal: true,
+    },
+  })
+
+  return res.json(serializeConfig(user))
+}
+
+export async function updateReserveStartingBalance(req, res) {
+  const schema = z.object({ reserve_starting_balance: reserveStartingBalanceSchema })
+  const result = schema.safeParse(req.body)
+  if (!result.success) {
+    return res.status(400).json({ error: result.error.flatten().fieldErrors })
+  }
+
+  const user = await prisma.user.update({
+    where: { id: req.userId },
+    data: { reserve_starting_balance: result.data.reserve_starting_balance },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      daily_rate: true,
+      reserve_starting_balance: true,
       start_date: true,
       monthly_budget_total: true,
       monthly_savings_goal: true,
@@ -112,6 +142,7 @@ export async function updateMonthlyBudget(req, res) {
       name: true,
       email: true,
       daily_rate: true,
+      reserve_starting_balance: true,
       start_date: true,
       monthly_budget_total: true,
       monthly_savings_goal: true,
@@ -136,6 +167,7 @@ export async function updateMonthlySavingsGoal(req, res) {
       name: true,
       email: true,
       daily_rate: true,
+      reserve_starting_balance: true,
       start_date: true,
       monthly_budget_total: true,
       monthly_savings_goal: true,
@@ -227,6 +259,7 @@ export async function resetAccount(req, res) {
       where: { id: userId },
       data: {
         daily_rate: 0,
+        reserve_starting_balance: 0,
         monthly_budget_total: null,
         monthly_savings_goal: null,
       },

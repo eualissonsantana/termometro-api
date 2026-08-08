@@ -3,7 +3,7 @@ import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma.js'
 
 const RECURRENCE_VALUES = ['never', 'daily', 'weekly', 'monthly']
-const TRANSACTION_TYPES = ['entrada', 'saida', 'diario', 'economia', 'cartao']
+const TRANSACTION_TYPES = ['entrada', 'saida', 'diario', 'economia', 'cartao', 'resgate']
 const monthQuerySchema = z.string().regex(/^\d{4}-\d{2}$/)
 const dateQuerySchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/)
 
@@ -96,7 +96,7 @@ function generateRecurringDates(dateStr, recurrence, { repeatCount = null, repea
 }
 
 const transactionSchema = z.object({
-  type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao']),
+  type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao', 'resgate']),
   category_id: z.string().uuid().optional().nullable(),
   amount: z.number().min(0),
   description: z.string().optional(),
@@ -109,7 +109,7 @@ const transactionSchema = z.object({
 })
 
 const bulkItemSchema = z.object({
-  type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao']),
+  type: z.enum(['entrada', 'saida', 'diario', 'economia', 'cartao', 'resgate']),
   amount: z.number().min(0),
   description: z.string().optional().default(''),
   date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
@@ -269,7 +269,7 @@ export async function create(req, res) {
   const { date, category_id, recurrence, repeat_count, repeat_until, paid: paidRaw, ...rest } = result.data
 
   // paid não se aplica ao tipo diário (gastos variáveis diários não são "contas a pagar")
-  const paid = rest.type === 'diario' ? null : (paidRaw ?? null)
+  const paid = (rest.type === 'diario' || rest.type === 'resgate') ? null : (paidRaw ?? null)
 
   if (rest.amount === 0 && rest.type !== 'diario') {
     return res.status(400).json({ error: 'Valor zero só é permitido para o tipo diário' })
@@ -332,7 +332,7 @@ export async function update(req, res) {
   const { date, category_id, repeat_count, repeat_until, paid: paidRaw, ...rest } = result.data
   const finalType = rest.type ?? existing.type
   // paid nunca se propaga para outros registros da série — é sempre por ocorrência
-  const paid = finalType === 'diario' ? null : (paidRaw !== undefined ? (paidRaw ?? null) : undefined)
+  const paid = (finalType === 'diario' || finalType === 'resgate') ? null : (paidRaw !== undefined ? (paidRaw ?? null) : undefined)
 
   if (category_id) {
     const category = await prisma.category.findFirst({

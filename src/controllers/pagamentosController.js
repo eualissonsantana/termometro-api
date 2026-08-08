@@ -16,7 +16,7 @@ export async function pagamentos(req, res) {
   const transactions = await prisma.transaction.findMany({
     where: {
       user_id: req.userId,
-      type: { not: 'diario' }, // diário nunca tem status de pagamento
+      type: { notIn: ['diario', 'resgate'] }, // diário e resgate não entram como contas
       date: { gte: start, lt: end },
     },
     orderBy: { date: 'asc' },

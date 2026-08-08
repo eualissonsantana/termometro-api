@@ -1,9 +1,5 @@
-import { getThermometerData, getPerformanceData } from '../services/thermometerService.js'
+import { getThermometerData, getPerformanceData, getReserveSnapshot } from '../services/thermometerService.js'
 import { ensureMonthSetup } from '../services/monthlySetupService.js'
-import { prisma } from '../lib/prisma.js'
-import { getMonthDateRange } from '../services/currentMonthConfigSyncService.js'
-
-const todayStr = () => new Date().toISOString().slice(0, 7) // "YYYY-MM"
 
 export async function thermometer(req, res) {
   const { month } = req.query
@@ -13,22 +9,18 @@ export async function thermometer(req, res) {
 
   await ensureMonthSetup(req.userId, month)
 
-  const { start, end } = getMonthDateRange(month)
-
-  const [days, savingsAgg] = await Promise.all([
+  const [days, reserveSnapshot] = await Promise.all([
     getThermometerData(req.userId, month),
-    prisma.transaction.aggregate({
-      where: {
-        user_id: req.userId,
-        type: 'economia',
-        date: { gte: start, lt: end },
-      },
-      _sum: { amount: true },
-    }),
+    getReserveSnapshot(req.userId, month),
   ])
 
-  const savings_month = Number(savingsAgg._sum.amount ?? 0)
-  return res.json({ days, savings_month, savings_total: savings_month })
+  const savings_month = reserveSnapshot.reserve_month_contributions
+  return res.json({
+    days,
+    savings_month,
+    savings_total: savings_month,
+    ...reserveSnapshot,
+  })
 }
 
 export async function performance(req, res) {

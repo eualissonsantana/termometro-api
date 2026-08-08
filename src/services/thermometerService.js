@@ -42,7 +42,7 @@ async function computeBalanceBeforeMonth(userId, monthStr) {
 
   while (current <= endDateStr) {
     const dayTxs = byDate[current] || []
-    let income = 0, expense = 0, daily = 0, savings = 0, card = 0
+    let income = 0, expense = 0, daily = 0, savings = 0, card = 0, rescue = 0
     let hasDiario = false
 
     for (const t of dayTxs) {
@@ -51,11 +51,12 @@ async function computeBalanceBeforeMonth(userId, monthStr) {
       else if (t.type === 'diario') { daily += Number(t.amount); hasDiario = true }
       else if (t.type === 'economia') savings += Number(t.amount)
       else if (t.type === 'cartao') card += Number(t.amount)
+      else if (t.type === 'resgate') rescue += Number(t.amount)
     }
 
     if (!hasDiario) daily = dailyRate
 
-    balance += income - expense - daily - savings - card
+    balance += income + rescue - expense - daily - savings - card
     current = shiftDay(current, 1)
   }
 
@@ -117,7 +118,7 @@ export async function getThermometerData(userId, month, startingBalance = null) 
     const isFuture = dateStr > todayStr
     const dayTxs = byDate[dateStr] || []
 
-    let income = 0, expense = 0, daily = 0, savings = 0, card = 0
+    let income = 0, expense = 0, daily = 0, savings = 0, card = 0, rescue = 0
     let hasDiario = false
     let dailyIsProjected = false
 
@@ -131,6 +132,7 @@ export async function getThermometerData(userId, month, startingBalance = null) 
         else if (t.type === 'diario') { daily += Number(t.amount); hasDiario = true }
         else if (t.type === 'economia') savings += Number(t.amount)
         else if (t.type === 'cartao') card += Number(t.amount)
+        else if (t.type === 'resgate') rescue += Number(t.amount)
       }
 
       // No diario registered → use projected daily_rate (even if value would be 0)
@@ -140,7 +142,7 @@ export async function getThermometerData(userId, month, startingBalance = null) 
       }
     }
 
-    balance += income - expense - daily - savings - card
+    balance += income + rescue - expense - daily - savings - card
 
     // All numeric fields are always present and never null — frontend sums these directly
     result.push({
@@ -152,12 +154,63 @@ export async function getThermometerData(userId, month, startingBalance = null) 
       diario_projetado: dailyIsProjected,
       cartao: card,
       economia: savings,
+      resgate: rescue,
       saldo: parseFloat(balance.toFixed(2)),
       is_future: isFuture,
     })
   }
 
   return result
+}
+
+export async function getReserveSnapshot(userId, month) {
+  const [yearStr, monthStr] = month.split('-')
+  const year = Number(yearStr)
+  const monthNumber = Number(monthStr)
+  const monthStart = new Date(Date.UTC(year, monthNumber - 1, 1))
+  const monthEnd = new Date(Date.UTC(year, monthNumber, 1))
+
+  const [user, cumulativeFlows, monthFlows] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: userId },
+      select: { reserve_starting_balance: true },
+    }),
+    prisma.transaction.groupBy({
+      by: ['type'],
+      where: {
+        user_id: userId,
+        type: { in: ['economia', 'resgate'] },
+        date: { lt: monthEnd },
+      },
+      _sum: { amount: true },
+    }),
+    prisma.transaction.groupBy({
+      by: ['type'],
+      where: {
+        user_id: userId,
+        type: { in: ['economia', 'resgate'] },
+        date: { gte: monthStart, lt: monthEnd },
+      },
+      _sum: { amount: true },
+    }),
+  ])
+
+  const reserveBase = Number(user?.reserve_starting_balance ?? 0)
+  const cumulativeEconomy = Number(cumulativeFlows.find(item => item.type === 'economia')?._sum.amount ?? 0)
+  const cumulativeRescue = Number(cumulativeFlows.find(item => item.type === 'resgate')?._sum.amount ?? 0)
+  const monthEconomy = Number(monthFlows.find(item => item.type === 'economia')?._sum.amount ?? 0)
+  const monthRescue = Number(monthFlows.find(item => item.type === 'resgate')?._sum.amount ?? 0)
+  const reserveMonthNet = Number((monthEconomy - monthRescue).toFixed(2))
+  const reserveTotal = Number((reserveBase + cumulativeEconomy - cumulativeRescue).toFixed(2))
+  const reserveMonthStart = Number((reserveTotal - reserveMonthNet).toFixed(2))
+
+  return {
+    reserve_total: reserveTotal,
+    reserve_month_start: reserveMonthStart,
+    reserve_month_net: reserveMonthNet,
+    reserve_month_contributions: Number(monthEconomy.toFixed(2)),
+    reserve_month_withdrawals: Number(monthRescue.toFixed(2)),
+  }
 }
 
 export async function getPerformanceData(userId, year) {

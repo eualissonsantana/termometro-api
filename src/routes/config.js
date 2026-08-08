@@ -4,6 +4,7 @@ import {
   getConfig,
   getMonthlyPlan,
   updateDailyRate,
+  updateReserveStartingBalance,
   updateMonthlyBudget,
   updateMonthlySavingsGoal,
   updateStartDate,
@@ -20,6 +21,7 @@ router.use(authenticate)
 
 router.get('/', getConfig)
 router.put('/daily-rate', updateDailyRate)
+router.put('/reserve-starting-balance', updateReserveStartingBalance)
 router.put('/start-date', updateStartDate)
 router.put('/monthly-budget', updateMonthlyBudget)
 router.put('/monthly-savings-goal', updateMonthlySavingsGoal)
