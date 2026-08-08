@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { prisma } from '../lib/prisma.js'
+import { resolveReserveStartingBalanceForTotal } from '../services/thermometerService.js'
 
 function serializeConfig(user) {
   return {
@@ -15,6 +16,10 @@ function serializeConfig(user) {
 const planningValueSchema = z.union([z.coerce.number().nonnegative(), z.null()])
 const reserveStartingBalanceSchema = z.coerce.number().nonnegative()
 const monthSchema = z.string().regex(/^\d{4}-\d{2}$/)
+const reserveTotalSchema = z.object({
+  month: monthSchema,
+  reserve_total: z.coerce.number().nonnegative(),
+})
 
 function serializeMonthlyPlan(plan, userConfig, month) {
   const budgetOverride = plan?.budget_total_override == null ? null : Number(plan.budget_total_override)
@@ -112,6 +117,36 @@ export async function updateReserveStartingBalance(req, res) {
   const user = await prisma.user.update({
     where: { id: req.userId },
     data: { reserve_starting_balance: result.data.reserve_starting_balance },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      daily_rate: true,
+      reserve_starting_balance: true,
+      start_date: true,
+      monthly_budget_total: true,
+      monthly_savings_goal: true,
+    },
+  })
+
+  return res.json(serializeConfig(user))
+}
+
+export async function updateReserveTotal(req, res) {
+  const result = reserveTotalSchema.safeParse(req.body)
+  if (!result.success) {
+    return res.status(400).json({ error: result.error.flatten().fieldErrors })
+  }
+
+  const nextReserveStartingBalance = await resolveReserveStartingBalanceForTotal(
+    req.userId,
+    result.data.month,
+    result.data.reserve_total,
+  )
+
+  const user = await prisma.user.update({
+    where: { id: req.userId },
+    data: { reserve_starting_balance: nextReserveStartingBalance },
     select: {
       id: true,
       name: true,

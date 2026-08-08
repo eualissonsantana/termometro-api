@@ -59,6 +59,10 @@ model Transaction {
   user        User            @relation(fields: [user_id], references: [id])
   category    Category?       @relation(fields: [category_id], references: [id])
 
+  @@index([user_id, date])
+  @@index([user_id, type, date])
+  @@index([user_id, category_id, date])
+  @@index([user_id, series_id, date])
   @@map("transactions")
 }
 

@@ -3,6 +3,38 @@ import { ensureMonthSetup } from './monthlySetupService.js'
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
+function money(value) {
+  return Number((Number(value) || 0).toFixed(2))
+}
+
+function monthBounds(month) {
+  const [yearStr, monthStr] = month.split('-')
+  const year = Number(yearStr)
+  const monthNumber = Number(monthStr)
+
+  return {
+    monthStart: new Date(Date.UTC(year, monthNumber - 1, 1)),
+    monthEnd: new Date(Date.UTC(year, monthNumber, 1)),
+  }
+}
+
+async function sumReserveFlows(userId, dateFilter) {
+  const flows = await prisma.transaction.groupBy({
+    by: ['type'],
+    where: {
+      user_id: userId,
+      type: { in: ['economia', 'resgate'] },
+      date: dateFilter,
+    },
+    _sum: { amount: true },
+  })
+
+  return {
+    economy: money(flows.find(item => item.type === 'economia')?._sum.amount ?? 0),
+    rescue: money(flows.find(item => item.type === 'resgate')?._sum.amount ?? 0),
+  }
+}
+
 // Walks day-by-day from the user's first transaction up to (not including) the first day
 // of `monthStr`, accumulating the real balance including projected daily_rate for days
 // without a real 'diario' entry. This is what makes the balance truly continuous.
@@ -164,53 +196,40 @@ export async function getThermometerData(userId, month, startingBalance = null) 
 }
 
 export async function getReserveSnapshot(userId, month) {
-  const [yearStr, monthStr] = month.split('-')
-  const year = Number(yearStr)
-  const monthNumber = Number(monthStr)
-  const monthStart = new Date(Date.UTC(year, monthNumber - 1, 1))
-  const monthEnd = new Date(Date.UTC(year, monthNumber, 1))
+  const { monthStart, monthEnd } = monthBounds(month)
 
   const [user, cumulativeFlows, monthFlows] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { reserve_starting_balance: true },
     }),
-    prisma.transaction.groupBy({
-      by: ['type'],
-      where: {
-        user_id: userId,
-        type: { in: ['economia', 'resgate'] },
-        date: { lt: monthEnd },
-      },
-      _sum: { amount: true },
-    }),
-    prisma.transaction.groupBy({
-      by: ['type'],
-      where: {
-        user_id: userId,
-        type: { in: ['economia', 'resgate'] },
-        date: { gte: monthStart, lt: monthEnd },
-      },
-      _sum: { amount: true },
-    }),
+    sumReserveFlows(userId, { lt: monthEnd }),
+    sumReserveFlows(userId, { gte: monthStart, lt: monthEnd }),
   ])
 
-  const reserveBase = Number(user?.reserve_starting_balance ?? 0)
-  const cumulativeEconomy = Number(cumulativeFlows.find(item => item.type === 'economia')?._sum.amount ?? 0)
-  const cumulativeRescue = Number(cumulativeFlows.find(item => item.type === 'resgate')?._sum.amount ?? 0)
-  const monthEconomy = Number(monthFlows.find(item => item.type === 'economia')?._sum.amount ?? 0)
-  const monthRescue = Number(monthFlows.find(item => item.type === 'resgate')?._sum.amount ?? 0)
-  const reserveMonthNet = Number((monthEconomy - monthRescue).toFixed(2))
-  const reserveTotal = Number((reserveBase + cumulativeEconomy - cumulativeRescue).toFixed(2))
-  const reserveMonthStart = Number((reserveTotal - reserveMonthNet).toFixed(2))
+  const reserveBase = money(user?.reserve_starting_balance ?? 0)
+  const cumulativeEconomy = cumulativeFlows.economy
+  const cumulativeRescue = cumulativeFlows.rescue
+  const monthEconomy = monthFlows.economy
+  const monthRescue = monthFlows.rescue
+  const reserveMonthNet = money(monthEconomy - monthRescue)
+  const reserveTotal = money(reserveBase + cumulativeEconomy - cumulativeRescue)
+  const reserveMonthStart = money(reserveTotal - reserveMonthNet)
 
   return {
     reserve_total: reserveTotal,
     reserve_month_start: reserveMonthStart,
     reserve_month_net: reserveMonthNet,
-    reserve_month_contributions: Number(monthEconomy.toFixed(2)),
-    reserve_month_withdrawals: Number(monthRescue.toFixed(2)),
+    reserve_month_contributions: monthEconomy,
+    reserve_month_withdrawals: monthRescue,
   }
+}
+
+export async function resolveReserveStartingBalanceForTotal(userId, month, reserveTotal) {
+  const { monthEnd } = monthBounds(month)
+  const cumulativeFlows = await sumReserveFlows(userId, { lt: monthEnd })
+
+  return money(Number(reserveTotal) - cumulativeFlows.economy + cumulativeFlows.rescue)
 }
 
 export async function getPerformanceData(userId, year) {
