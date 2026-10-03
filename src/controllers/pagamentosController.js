@@ -1,4 +1,5 @@
 import { prisma } from '../lib/prisma.js'
+import { ensureOpenRecurringTransactionsThrough } from '../services/recurringTransactionService.js'
 
 // GET /api/dashboard/pagamentos?month=YYYY-MM
 // Retorna todas as transações não-diário do mês com o campo `paid`,
@@ -12,6 +13,8 @@ export async function pagamentos(req, res) {
   const [year, monthNum] = month.split('-').map(Number)
   const start = new Date(Date.UTC(year, monthNum - 1, 1))
   const end   = new Date(Date.UTC(year, monthNum, 1))
+
+  await ensureOpenRecurringTransactionsThrough(req.userId, new Date(end.getTime() - 86400000).toISOString().slice(0, 10))
 
   const transactions = await prisma.transaction.findMany({
     where: {

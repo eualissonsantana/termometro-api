@@ -1,5 +1,6 @@
 import { prisma } from '../lib/prisma.js'
 import { ensureMonthSetup } from './monthlySetupService.js'
+import { ensureOpenRecurringTransactionsThrough } from './recurringTransactionService.js'
 
 const MONTH_LABELS = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 
@@ -236,6 +237,14 @@ export async function getPerformanceData(userId, year) {
   const todayStr = new Date().toISOString().slice(0, 10)
   const currentMonthStr = todayStr.slice(0, 7) // e.g. "2026-05"
 
+  // Materialize open recurring entries before calculating the accumulated
+  // balance, so jumping directly to a later year still includes every slot.
+  const yearStart = new Date(Date.UTC(Number(year), 0, 1))
+  await ensureOpenRecurringTransactionsThrough(
+    userId,
+    new Date(yearStart.getTime() - 86400000).toISOString().slice(0, 10),
+  )
+
   // Balance accumulated up to the end of the previous year
   let runningBalance = await computeBalanceBeforeMonth(userId, `${year}-01`)
 
@@ -252,6 +261,8 @@ export async function getPerformanceData(userId, year) {
     }
 
     await ensureMonthSetup(userId, monthStr)
+    const monthEnd = new Date(Date.UTC(Number(year), month, 0)).toISOString().slice(0, 10)
+    await ensureOpenRecurringTransactionsThrough(userId, monthEnd)
 
     const days = await getThermometerData(userId, monthStr, runningBalance)
     runningBalance = days[days.length - 1].saldo

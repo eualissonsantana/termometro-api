@@ -20,6 +20,7 @@ model User {
   monthly_savings_goal  Decimal?         @db.Decimal(10, 2)
   created_at            DateTime         @default(now())
   transactions          Transaction[]
+  recurrenceExceptions  RecurrenceException[]
   categories            Category[]
   dailyCategories       DailyCategory[]
   fixedExpenses         FixedExpense[]
@@ -44,26 +45,43 @@ model Category {
 }
 
 model Transaction {
-  id          String          @id @default(uuid())
-  user_id     String
-  type        TransactionType
-  category_id String?
-  amount      Decimal         @db.Decimal(10, 2)
-  description String?         @db.VarChar(255)
-  date        DateTime        @db.Date
-  recurrence  String?         @default("never") @db.VarChar(50)
-  series_id   String?         @db.Uuid
-  source      Source          @default(web)
-  paid        Boolean?
-  created_at  DateTime        @default(now())
-  user        User            @relation(fields: [user_id], references: [id])
-  category    Category?       @relation(fields: [category_id], references: [id])
+  id                     String          @id @default(uuid())
+  user_id                String
+  type                   TransactionType
+  category_id            String?
+  amount                 Decimal         @db.Decimal(10, 2)
+  description            String?         @db.VarChar(255)
+  date                   DateTime        @db.Date
+  recurrence             String?         @default("never") @db.VarChar(50)
+  series_id              String?         @db.Uuid
+  recurrence_open_ended  Boolean         @default(false)
+  recurrence_anchor_date DateTime?       @db.Date
+  recurrence_slot_date   DateTime?       @db.Date
+  source                 Source          @default(web)
+  paid                   Boolean?
+  created_at             DateTime        @default(now())
+  user                   User            @relation(fields: [user_id], references: [id])
+  category               Category?       @relation(fields: [category_id], references: [id])
 
   @@index([user_id, date])
   @@index([user_id, type, date])
   @@index([user_id, category_id, date])
   @@index([user_id, series_id, date])
+  @@index([user_id, recurrence_open_ended, recurrence_anchor_date], map: "transactions_user_recurrence_open_anchor_idx")
+  @@unique([series_id, recurrence_slot_date])
   @@map("transactions")
+}
+
+model RecurrenceException {
+  id        String   @id @default(uuid())
+  user_id   String
+  series_id String   @db.Uuid
+  slot_date DateTime @db.Date
+  user      User     @relation(fields: [user_id], references: [id])
+
+  @@unique([series_id, slot_date])
+  @@index([user_id, series_id])
+  @@map("recurrence_exceptions")
 }
 
 // Subcategorias que compõem o daily_rate. Quando o usuário usa esse modelo,

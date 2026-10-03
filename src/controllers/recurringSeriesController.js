@@ -75,6 +75,7 @@ export async function remove(req, res) {
 
   const sample = await prisma.transaction.findFirst({
     where: { series_id, user_id: req.userId },
+    select: { recurrence_open_ended: true },
   })
   if (!sample) return res.status(404).json({ error: 'Série não encontrada' })
 
@@ -82,7 +83,15 @@ export async function remove(req, res) {
   if (scope === 'future') {
     const today = new Date()
     today.setUTCHours(0, 0, 0, 0)
-    where.date = { gte: today }
+    where[sample.recurrence_open_ended ? 'recurrence_slot_date' : 'date'] = { gte: today }
+    await prisma.transaction.updateMany({
+      where: { series_id, user_id: req.userId },
+      data: { recurrence_open_ended: false },
+    })
+  } else {
+    await prisma.recurrenceException.deleteMany({
+      where: { series_id, user_id: req.userId },
+    })
   }
 
   await prisma.transaction.deleteMany({ where })

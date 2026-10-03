@@ -1,5 +1,11 @@
 import { getThermometerData, getPerformanceData, getReserveSnapshot } from '../services/thermometerService.js'
 import { ensureMonthSetup } from '../services/monthlySetupService.js'
+import { ensureOpenRecurringTransactionsThrough } from '../services/recurringTransactionService.js'
+
+function monthEnd(month) {
+  const [year, monthNumber] = month.split('-').map(Number)
+  return new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10)
+}
 
 export async function thermometer(req, res) {
   const { month } = req.query
@@ -7,7 +13,10 @@ export async function thermometer(req, res) {
     return res.status(400).json({ error: 'Parâmetro month obrigatório (formato: YYYY-MM)' })
   }
 
-  await ensureMonthSetup(req.userId, month)
+  await Promise.all([
+    ensureMonthSetup(req.userId, month),
+    ensureOpenRecurringTransactionsThrough(req.userId, monthEnd(month)),
+  ])
 
   const [days, reserveSnapshot] = await Promise.all([
     getThermometerData(req.userId, month),

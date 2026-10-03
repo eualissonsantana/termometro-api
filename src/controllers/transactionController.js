@@ -1,6 +1,10 @@
 import { z } from 'zod'
 import { randomUUID } from 'crypto'
 import { prisma } from '../lib/prisma.js'
+import {
+  ensureOpenRecurringTransactionsThrough,
+  nextRecurringDate,
+} from '../services/recurringTransactionService.js'
 
 const RECURRENCE_VALUES = ['never', 'daily', 'weekly', 'monthly']
 const TRANSACTION_TYPES = ['entrada', 'saida', 'diario', 'economia', 'cartao', 'resgate']
@@ -26,6 +30,12 @@ function nextMonthUtc(monthStr) {
   return new Date(Date.UTC(year, month, 1))
 }
 
+function endOfMonthStr(monthStr) {
+  const end = nextMonthUtc(monthStr)
+  end.setUTCDate(0)
+  return end.toISOString().slice(0, 10)
+}
+
 function startOfDayUtc(dateStr) {
   const [year, month, day] = dateStr.split('-').map(Number)
   return new Date(Date.UTC(year, month - 1, day))
@@ -41,6 +51,10 @@ function nextDayUtc(dateStr) {
 // repeatCount: max number of extra dates to generate
 // repeatUntil: stop generating at this date string (inclusive), e.g. '2026-12-31'
 function generateRecurringDates(dateStr, recurrence, { repeatCount = null, repeatUntil = null } = {}) {
+  // No limit means a lazy series; those dates are materialized by
+  // recurringTransactionService when a month is requested.
+  if (repeatCount === null && repeatUntil === null) return []
+
   const [year, month, day] = dateStr.split('-').map(Number)
   const pad = (n) => String(n).padStart(2, '0')
   const daysInMonth = (y, m) => new Date(Date.UTC(y, m, 0)).getUTCDate()
@@ -54,22 +68,18 @@ function generateRecurringDates(dateStr, recurrence, { repeatCount = null, repea
   const dates = []
 
   if (recurrence === 'daily') {
-    const defaultEnd = `${year}-${pad(month)}-${pad(daysInMonth(year, month))}`
     let cur = addDays(dateStr, 1)
     while (true) {
       if (repeatCount !== null && dates.length >= repeatCount) break
-      const end = repeatUntil ?? defaultEnd
-      if (cur > end) break
+      if (repeatUntil && cur > repeatUntil) break
       dates.push(cur)
       cur = addDays(cur, 1)
     }
   } else if (recurrence === 'weekly') {
-    const defaultEnd = `${year}-${pad(month)}-${pad(daysInMonth(year, month))}`
     let cur = addDays(dateStr, 7)
     while (true) {
       if (repeatCount !== null && dates.length >= repeatCount) break
-      const end = repeatUntil ?? defaultEnd
-      if (cur > end) break
+      if (repeatUntil && cur > repeatUntil) break
       dates.push(cur)
       cur = addDays(cur, 7)
     }
@@ -77,12 +87,8 @@ function generateRecurringDates(dateStr, recurrence, { repeatCount = null, repea
     let curYear = year
     let curMonth = month + 1
     if (curMonth > 12) { curYear++; curMonth = 1 }
-    // Sem limite explícito: só gera até o fim do ano corrente (comportamento original)
-    const hardYearEnd = (repeatCount === null && repeatUntil === null) ? year : null
-
     while (true) {
       if (repeatCount !== null && dates.length >= repeatCount) break
-      if (hardYearEnd !== null && curYear > hardYearEnd) break
       const clamped = Math.min(day, daysInMonth(curYear, curMonth))
       const ds = `${curYear}-${pad(curMonth)}-${pad(clamped)}`
       if (repeatUntil && ds > repeatUntil) break
@@ -211,11 +217,13 @@ export async function list(req, res) {
     const start = startOfMonthUtc(month)
     const end = nextMonthUtc(month)
     where.date = { gte: start, lt: end }
+    await ensureOpenRecurringTransactionsThrough(req.userId, endOfMonthStr(month))
   } else if (from && to) {
     where.date = {
       gte: startOfDayUtc(from),
       lt: nextDayUtc(to),
     }
+    await ensureOpenRecurringTransactionsThrough(req.userId, to)
   }
 
   const transactions = await prisma.transaction.findMany({
@@ -229,7 +237,9 @@ export async function list(req, res) {
   })
 
   // Para transações de séries recorrentes, calcula a posição de parcela (X/Y)
-  const uniqueSeriesIds = [...new Set(transactions.filter(t => t.series_id).map(t => t.series_id))]
+  const uniqueSeriesIds = [...new Set(transactions
+    .filter(t => t.series_id && !t.recurrence_open_ended)
+    .map(t => t.series_id))]
 
   let positionMap = {}
   if (uniqueSeriesIds.length > 0) {
@@ -291,21 +301,37 @@ export async function create(req, res) {
   }
 
   const seriesId = recurrence !== 'never' ? randomUUID() : null
-  const baseData = { ...rest, paid, recurrence, series_id: seriesId, category_id: category_id ?? null, user_id: req.userId }
+  const openEnded = Boolean(seriesId && repeat_count == null && repeat_until == null)
+  const startDate = seriesId ? startOfDayUtc(date) : null
+  const baseData = {
+    ...rest,
+    paid,
+    recurrence,
+    series_id: seriesId,
+    recurrence_open_ended: openEnded,
+    recurrence_anchor_date: startDate,
+    recurrence_slot_date: startDate,
+    category_id: category_id ?? null,
+    user_id: req.userId,
+  }
 
   const transaction = await prisma.transaction.create({
-    data: { ...baseData, date: new Date(date) },
+    data: { ...baseData, date: startOfDayUtc(date) },
     include: { category: { select: { id: true, name: true } } },
   })
 
-  if (recurrence !== 'never') {
+  if (recurrence !== 'never' && !openEnded) {
     // repeat_count é o total de parcelas (incluindo a primeira já criada acima),
     // então geramos repeat_count - 1 datas extras.
     const extraCount = repeat_count != null ? repeat_count - 1 : null
     const extraDates = generateRecurringDates(date, recurrence, { repeatCount: extraCount, repeatUntil: repeat_until ?? null })
     if (extraDates.length > 0) {
       await prisma.transaction.createMany({
-        data: extraDates.map(d => ({ ...baseData, date: new Date(d) })),
+        data: extraDates.map(d => ({
+          ...baseData,
+          date: startOfDayUtc(d),
+          recurrence_slot_date: startOfDayUtc(d),
+        })),
         skipDuplicates: true,
       })
     }
@@ -356,7 +382,15 @@ export async function update(req, res) {
 
   if (scope !== 'one' && existing.series_id) {
     const where = { series_id: existing.series_id, user_id: req.userId }
-    if (scope === 'future') where.date = { gte: existing.date }
+    if (scope === 'future') {
+      where.recurrence_slot_date = { gte: existing.recurrence_slot_date ?? existing.date }
+    }
+    if (existing.recurrence_open_ended && rest.recurrence === 'never') {
+      await prisma.transaction.updateMany({
+        where: { series_id: existing.series_id, user_id: req.userId },
+        data: { recurrence_open_ended: false },
+      })
+    }
     // updateMany não aceita date dentro do data (só campos simples), então
     // extraímos date separado e fazemos update individual no registro atual.
     // paid também é excluído do updateMany pois é sempre por ocorrência.
@@ -376,12 +410,17 @@ export async function update(req, res) {
   if (repeat_count != null && existing.series_id && scope !== 'one') {
     const seriesWhere = { series_id: existing.series_id, user_id: req.userId }
     // Para scope 'future', considera apenas as ocorrências a partir desta data
-    if (scope === 'future') seriesWhere.date = { gte: existing.date }
+    if (scope === 'future') {
+      seriesWhere.recurrence_slot_date = { gte: existing.recurrence_slot_date ?? existing.date }
+    }
 
     const seriesTxs = await prisma.transaction.findMany({
       where: seriesWhere,
-      orderBy: { date: 'asc' },
-      select: { id: true, date: true },
+      orderBy: [
+        { recurrence_slot_date: 'asc' },
+        { date: 'asc' },
+      ],
+      select: { id: true, date: true, recurrence_slot_date: true },
     })
 
     const target = repeat_count
@@ -393,7 +432,8 @@ export async function update(req, res) {
       await prisma.transaction.deleteMany({ where: { id: { in: toDelete }, user_id: req.userId } })
     } else if (target > current && seriesTxs.length > 0) {
       // Estende a série gerando datas a partir da última ocorrência existente
-      const lastDate = seriesTxs[seriesTxs.length - 1].date.toISOString().substring(0, 10)
+      const lastOccurrence = seriesTxs[seriesTxs.length - 1]
+      const lastDate = (lastOccurrence.recurrence_slot_date ?? lastOccurrence.date).toISOString().substring(0, 10)
       const currentRecurrence = rest.recurrence ?? existing.recurrence
       const extraDates = generateRecurringDates(lastDate, currentRecurrence, { repeatCount: target - current })
       if (extraDates.length > 0) {
@@ -406,7 +446,10 @@ export async function update(req, res) {
             description: rest.description !== undefined ? rest.description : existing.description,
             category_id: 'category_id' in result.data ? (category_id ?? null) : existing.category_id,
             recurrence: currentRecurrence,
-            date: new Date(d),
+            date: startOfDayUtc(d),
+            recurrence_open_ended: existing.recurrence_open_ended,
+            recurrence_anchor_date: existing.recurrence_anchor_date ?? existing.date,
+            recurrence_slot_date: startOfDayUtc(d),
             source: existing.source,
             paid: null,
           })),
@@ -436,8 +479,59 @@ export async function remove(req, res) {
 
   if (scope !== 'one' && existing.series_id) {
     const where = { series_id: existing.series_id, user_id: req.userId }
-    if (scope === 'future') where.date = { gte: existing.date }
+    if (scope === 'future') {
+      if (existing.recurrence_open_ended) {
+        // Close the lazy series before deleting materialized future rows, so
+        // opening another month cannot recreate the deleted occurrences.
+        await prisma.transaction.updateMany({
+          where: { series_id: existing.series_id, user_id: req.userId },
+          data: { recurrence_open_ended: false },
+        })
+      }
+      where.recurrence_slot_date = { gte: existing.recurrence_slot_date ?? existing.date }
+    } else {
+      await prisma.recurrenceException.deleteMany({
+        where: { user_id: req.userId, series_id: existing.series_id },
+      })
+    }
     await prisma.transaction.deleteMany({ where })
+  } else if (existing.series_id && existing.recurrence_open_ended) {
+    const slotDate = existing.recurrence_slot_date ?? existing.date
+    const remainingOccurrences = await prisma.transaction.count({
+      where: {
+        series_id: existing.series_id,
+        user_id: req.userId,
+        id: { not: id },
+        recurrence_open_ended: true,
+      },
+    })
+    if (remainingOccurrences === 0) {
+      const anchorDate = existing.recurrence_anchor_date ?? existing.date
+      const lastSkippedSlot = await prisma.recurrenceException.findFirst({
+        where: {
+          user_id: req.userId,
+          series_id: existing.series_id,
+          slot_date: { gt: slotDate },
+        },
+        orderBy: { slot_date: 'desc' },
+        select: { slot_date: true },
+      })
+      const cursorDate = lastSkippedSlot?.slot_date ?? slotDate
+      const nextDate = nextRecurringDate(anchorDate, existing.recurrence, cursorDate)
+      if (nextDate) await ensureOpenRecurringTransactionsThrough(req.userId, nextDate)
+    }
+
+    await prisma.$transaction([
+      prisma.recurrenceException.createMany({
+        data: [{
+          user_id: req.userId,
+          series_id: existing.series_id,
+          slot_date: slotDate,
+        }],
+        skipDuplicates: true,
+      }),
+      prisma.transaction.delete({ where: { id } }),
+    ])
   } else {
     await prisma.transaction.delete({ where: { id } })
   }
