@@ -8,13 +8,14 @@
     "postinstall": "prisma generate",
     "dev": "node --watch src/server.js",
     "dev:all": "bash scripts/dev-all.sh",
-    "build": "prisma generate",
-    "start": "node scripts/check-env.js && prisma generate && prisma migrate deploy && node src/server.js",
+    "build": "node scripts/check-env.js && prisma generate && prisma migrate deploy",
+    "start": "node scripts/check-env.js && node src/server.js",
     "db:migrate": "prisma migrate dev",
     "db:generate": "prisma generate",
     "db:studio": "prisma studio",
     "db:seed": "node prisma/seed.js",
-    "db:seed-dev": "node prisma/seed-dev.js"
+    "db:seed-dev": "node prisma/seed-dev.js",
+    "db:backup": "bash scripts/backup-db.sh"
   },
   "dependencies": {
     "@prisma/client": "^6.0.0",
