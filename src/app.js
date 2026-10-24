@@ -5,6 +5,7 @@ import transactionRoutes from './routes/transactions.js'
 import dashboardRoutes from './routes/dashboard.js'
 import configRoutes from './routes/config.js'
 import categoriesRoutes from './routes/categories.js'
+import { errorHandler } from './middlewares/errorHandler.js'
 
 const app = express()
 
@@ -20,5 +21,8 @@ app.use('/api/transactions', transactionRoutes)
 app.use('/api/dashboard', dashboardRoutes)
 app.use('/api/config', configRoutes)
 app.use('/api/categories', categoriesRoutes)
+
+// Precisa ser o último middleware: recebe os erros de todas as rotas acima
+app.use(errorHandler)
 
 export default app
